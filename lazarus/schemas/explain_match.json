@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["reasons", "risks"],
+  "properties": {
+    "reasons": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+    "risks": {"type": "array", "items": {"type": "string"}, "maxItems": 2}
+  },
+  "additionalProperties": false
+}

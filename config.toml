@@ -1,0 +1,55 @@
+[claude]
+binary = "claude"
+timeout_s = 120
+retries = 1
+concurrency = 3
+explain_top_n = 10
+
+[brightdata]
+limit_per_source = 25
+poll_interval_s = 10
+poll_timeout_s = 300
+
+# dataset_id de cada scraper "discover by keyword". Vacío = fuente desactivada.
+[brightdata.datasets]
+linkedin = "gd_lpfll7v5hcqtkxl6l"
+indeed = ""     # copiar del panel de Bright Data
+glassdoor = ""  # copiar del panel de Bright Data
+
+# Campos de entrada de cada dataset. {keyword}, {location} y {country} se reemplazan.
+# Verificar con la documentación de cada dataset.
+[brightdata.inputs.linkedin]
+keyword = "{keyword}"
+location = "{location}"
+country = "{country}"
+
+[brightdata.inputs.indeed]
+keyword_search = "{keyword}"
+location = "{location}"
+country = "{country}"
+
+[brightdata.inputs.glassdoor]
+keyword = "{keyword}"
+location = "{location}"
+country = "{country}"
+
+[firecrawl]
+search_limit = 20
+max_scrapes = 15
+cache_days = 7
+
+[search]
+reuse_hours = 24
+
+[usage]
+firecrawl_monthly = 1000
+brightdata_monthly = 5000
+warn_ratio = 0.8
+
+[logging]
+retention_days = 14
+debug = false   # también con la variable LAZARUS_DEBUG=1
+
+[metrics]
+min_salary_n = 5
+gap_threshold = 0.2

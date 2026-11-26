@@ -1,0 +1,46 @@
+# Lista base de dominios para Firecrawl. Propuesta: revisar antes de usar.
+[[domain]]
+host = "mx.computrabajo.com"
+country = "MX"
+[[domain]]
+host = "occ.com.mx"
+country = "MX"
+[[domain]]
+host = "co.computrabajo.com"
+country = "CO"
+[[domain]]
+host = "elempleo.com"
+country = "CO"
+[[domain]]
+host = "ar.computrabajo.com"
+country = "AR"
+[[domain]]
+host = "bumeran.com.ar"
+country = "AR"
+[[domain]]
+host = "zonajobs.com.ar"
+country = "AR"
+[[domain]]
+host = "cl.computrabajo.com"
+country = "CL"
+[[domain]]
+host = "laborum.cl"
+country = "CL"
+[[domain]]
+host = "trabajando.cl"
+country = "CL"
+[[domain]]
+host = "pe.computrabajo.com"
+country = "PE"
+[[domain]]
+host = "bumeran.com.pe"
+country = "PE"
+[[domain]]
+host = "infojobs.com.br"
+country = "BR"
+[[domain]]
+host = "catho.com.br"
+country = "BR"
+[[domain]]
+host = "getonbrd.com"
+country = ""

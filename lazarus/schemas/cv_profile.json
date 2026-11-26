@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "required": ["skills", "seniority", "years_experience", "languages", "roles", "summary"],
+  "properties": {
+    "skills": {"type": "array", "items": {"type": "string"}},
+    "seniority": {"type": ["string", "null"], "enum": ["intern", "junior", "mid", "senior", "lead", null]},
+    "years_experience": {"type": ["number", "null"]},
+    "languages": {"type": "array", "items": {"type": "string"}},
+    "roles": {"type": "array", "items": {"type": "string"}},
+    "summary": {"type": "string"}
+  },
+  "additionalProperties": false
+}

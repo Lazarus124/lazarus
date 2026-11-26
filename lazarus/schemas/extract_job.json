@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "required": ["is_job_posting", "title", "company", "country", "city", "modality", "seniority",
+               "skills_required", "skills_nice", "years_min", "language", "salary"],
+  "properties": {
+    "is_job_posting": {"type": "boolean"},
+    "title": {"type": ["string", "null"]},
+    "company": {"type": ["string", "null"]},
+    "country": {"type": ["string", "null"]},
+    "city": {"type": ["string", "null"]},
+    "modality": {"type": "string", "enum": ["remote", "hybrid", "onsite", "unknown"]},
+    "seniority": {"type": "string", "enum": ["intern", "junior", "mid", "senior", "lead", "unknown"]},
+    "skills_required": {"type": "array", "items": {"type": "string"}},
+    "skills_nice": {"type": "array", "items": {"type": "string"}},
+    "years_min": {"type": ["integer", "null"]},
+    "language": {"type": ["string", "null"], "enum": ["es", "pt", "en", null]},
+    "salary": {
+      "type": ["object", "null"],
+      "required": ["min", "max", "currency", "period"],
+      "properties": {
+        "min": {"type": ["number", "null"]},
+        "max": {"type": ["number", "null"]},
+        "currency": {"type": ["string", "null"]},
+        "period": {"type": ["string", "null"], "enum": ["hour", "month", "year", null]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

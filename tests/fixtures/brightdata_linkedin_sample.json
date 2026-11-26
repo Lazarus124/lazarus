@@ -1,0 +1,9 @@
+[
+  {"url": "https://www.linkedin.com/jobs/view/devops-engineer-at-acme-111?trk=public_jobs", "job_posting_id": "111",
+   "job_title": "DevOps Engineer Jr", "company_name": "Acme", "job_location": "Guadalajara, Jalisco", "country_code": "MX",
+   "job_summary": "<p>Buscamos DevOps Jr.</p><ul><li>AWS</li><li>Linux</li><li>Terraform</li></ul>", "job_posted_date": "2026-11-20"},
+  {"url": "https://www.linkedin.com/jobs/view/cloud-support-at-beta-222", "job_posting_id": "222",
+   "job_title": "Cloud Support Associate", "company_name": "Beta", "job_location": "Remoto", "country_code": "MX",
+   "job_summary": "Soporte cloud. Requisitos: AWS, redes, inglés.", "job_posted_date": "2026-11-21"},
+  {"error": "dead_page", "url": "https://www.linkedin.com/jobs/view/333"}
+]
