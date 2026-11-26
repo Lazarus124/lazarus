@@ -1,89 +1,119 @@
 # Lazarus
 
-Aplicación web local para buscar empleo con IA. Nombre provisional.
+Aplicación local para buscar empleo con IA. Proyecto del programa **AWS re/Start**.
 
-Lazarus busca vacantes, las compara con su CV, escribe cartas de presentación y muestra métricas del mercado.
-Lazarus nunca aplica por usted.
+> "Lazarus" es un nombre provisional.
 
-## Instalar en Windows (recomendado)
+Lazarus busca vacantes en varios portales, las compara con el CV del usuario, escribe cartas de presentación
+y muestra qué piden las empresas. Todo corre en la computadora del usuario. La IA es **Claude**, mediante
+`claude -p` y la suscripción local de Claude Code.
 
-1. Ejecute `dist/Lazarus-Setup-0.1.5.exe`. No necesita permisos de administrador.
-   Windows SmartScreen puede advertir que el instalador no está firmado: elija **Más información → Ejecutar de todas formas**.
-2. Abra **Lazarus** desde el menú Inicio o el escritorio. El navegador abre la app.
-3. En **Configuración**, pegue las claves de Firecrawl y Bright Data. Se guardan cifradas con Windows (DPAPI).
-4. Requisito aparte: Claude Code instalado. Si no hay sesión, la app muestra el botón «Iniciar sesión en Claude».
+**Lazarus nunca aplica a una vacante.** El usuario aplica en el portal original.
 
-El instalador incluye Python 3.12 y todas las librerías. Se instala en `%LOCALAPPDATA%\Programs\Lazarus`.
-Desinstalar no borra sus datos (`%USERPROFILE%\.lazarus`).
+## Funciones (MVP)
 
-Para reconstruir el instalador desde Linux: `installer/build.sh` (requiere `nsis`, `zip`, `curl` y `python3`).
+| Función | Descripción |
+|---|---|
+| CV | Carga un CV en PDF o DOCX. Claude extrae skills, seniority, idiomas y roles. |
+| Búsqueda | Bright Data (LinkedIn Jobs, Indeed, Glassdoor) y Firecrawl (lista configurable de portales: Computrabajo, OCC, Bumeran, Get on Board…). Sin duplicados. |
+| Ranking | Claude analiza cada vacante. Python calcula un score de 0 a 100. Claude explica las 10 mejores. |
+| Carta | Claude escribe una carta con hechos del CV. El usuario la edita y la descarga en DOCX. |
+| Mercado | Top skills, brecha CV vs mercado, seniority, modalidad y salarios publicados. |
+| Corridas | Cada acción tiene un `run_id`. Logs con pasos, tiempos, consumo y errores. Vista de rendimiento. |
+| Configuración | Claves de API cifradas (DPAPI en Windows), datasets de Bright Data, dominios, sesión de Claude. |
 
-## Requisitos (desarrollo)
+## Arquitectura
 
-- Python 3.10 o superior.
-- Claude Code instalado y con sesión iniciada (`claude --version` responde).
-  En Windows, use el instalador nativo (`claude.exe`). Un `claude.cmd` de npm puede fallar con argumentos JSON.
-- Una key de Firecrawl y una key de Bright Data (planes gratis). Se cargan en **Configuración**.
-
-## Inicio rápido
-
-```powershell
-cd lazarus
-python -m venv .venv
-.venv\Scripts\activate            # macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py              # abre http://localhost:8501
-# Cargue las claves en Configuración (o, solo para desarrollo, en .env)
+```mermaid
+flowchart LR
+  UI[Streamlit<br/>pages/] --> SVC[lazarus/services.py]
+  SVC --> SRC[sources/<br/>Bright Data · Firecrawl]
+  SVC --> CC[claude_client]
+  SVC --> DB[(SQLite<br/>~/.lazarus)]
+  SVC --> LOG[runlog<br/>JSONL + tablas]
+  CC --> CLI[claude -p] --> AN[(Claude<br/>suscripción)]
+  SRC --> BD[(Bright Data API)]
+  SRC --> FC[(Firecrawl API)]
 ```
 
-PRECAUCIÓN: no cree `.venv` dentro de una carpeta sincronizada (OneDrive, Dropbox) si puede evitarlo.
-La sincronización de miles de archivos hace lenta la instalación.
+Decisiones principales:
 
-## Datos
+- **Score determinista en Python.** Rápido, repetible y fácil de probar. Claude solo escribe las razones.
+- **Claude sin herramientas** y en una carpeta temporal vacía. El texto de las vacantes es contenido externo.
+- **El CV solo sale hacia Claude.** Bright Data y Firecrawl solo reciben rol, ubicación y dominios.
+- **Datos fuera del repositorio** (`~/.lazarus`): base SQLite, logs y claves cifradas.
 
-La base SQLite y los logs están en `~/.lazarus` (Windows: `C:\Users\<usuario>\.lazarus`).
-Esta carpeta está fuera del repositorio y fuera de OneDrive: la sincronización puede dañar una base SQLite abierta.
-Para usar otra carpeta, defina `LAZARUS_DATA_DIR` en `.env`.
+## Instalar en Windows
 
-## Configuración
+1. Descargue `Lazarus-Setup-<versión>.exe` (ver *Releases*) y ejecútelo. No necesita permisos de administrador.
+   SmartScreen puede advertir que no está firmado: **Más información → Ejecutar de todas formas**.
+2. Abra **Lazarus** desde el menú Inicio. El navegador abre la app.
+3. Si no hay sesión de Claude, use el botón **Iniciar sesión en Claude**.
+4. En **Configuración**, pegue las claves de Firecrawl y Bright Data.
 
-- **Configuración** (en la app): claves de API, `dataset_id` de Bright Data y ruta de `claude`.
-- `.env`: opcional, solo para desarrollo. Nunca lo suba a GitHub.
-- `config.toml`: límites, timeouts, datasets de Bright Data, retención de logs.
-- `data/domains_base.toml`: lista base de dominios para Firecrawl.
+Requisito aparte: [Claude Code](https://claude.com/download) 2.1.41 o superior.
 
-Antes de usar Indeed y Glassdoor, copie su `dataset_id` del panel de Bright Data en **Configuración**.
-
-## Pruebas
+## Desarrollo
 
 ```bash
-pytest -q
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+streamlit run app.py               # http://localhost:8501
+pytest -q                          # sin red y sin claude (usa fakes)
 ```
 
-Las pruebas no usan red ni `claude`. Usan fakes y fixtures.
+Las claves se cargan en **Configuración**. Para desarrollo también se pueden poner en `.env` (ver `.env.example`).
+Nunca suba `.env`, bases de datos, logs ni CV reales.
 
-## Logs y troubleshooting
+### Construir el instalador
 
-Cada acción es una corrida con un `run_id`. Los errores en la UI muestran el `run_id` corto.
+Desde Linux, con `nsis`, `zip`, `curl` y `python3`:
 
-1. Copie el `run_id` del mensaje de error.
-2. Abra la página **Corridas** y busque la corrida.
-3. Lea el paso con estado `error`.
-4. Si la causa no está clara, active el modo debug en **Configuración** y repita la acción.
-5. Exporte la corrida (ZIP) si necesita ayuda.
+```bash
+installer/build.sh
+```
 
-ADVERTENCIA: el modo debug guarda el texto del CV en `logs/debug/`. Desactívelo al terminar.
+El script descarga Python 3.12 para Windows (python-build-standalone), instala las librerías `win_amd64`,
+comprime la app y genera `dist/Lazarus-Setup-<versión>.exe`.
 
 ## Estructura
 
 ```
-app.py, pages/         UI de Streamlit (sin lógica de negocio)
-lazarus/services.py    casos de uso que llama la UI
-lazarus/claude_client  única puerta a claude -p
-lazarus/sources/       Bright Data y Firecrawl
-lazarus/normalize.py   URLs, skills y duplicados
-lazarus/scoring.py     score determinista
-lazarus/metrics.py     métricas de mercado
-lazarus/runlog.py      logs de corridas y pasos
-tests/                 pytest
+app.py, pages/            UI de Streamlit (sin lógica de negocio)
+launcher.py               lanzador de Windows (una instancia, solo 127.0.0.1)
+lazarus/services.py       casos de uso que llama la UI
+lazarus/claude_client.py  única puerta a claude -p (prompts/ y schemas/)
+lazarus/sources/          Bright Data y Firecrawl
+lazarus/normalize.py      URLs, skills canónicas y duplicados
+lazarus/scoring.py        score determinista
+lazarus/metrics.py        métricas de mercado
+lazarus/runlog.py         logs de corridas y pasos
+lazarus/secrets.py        claves cifradas (DPAPI)
+data/domains_base.toml    lista base de portales
+installer/                NSIS, script de build e ícono
+tests/                    pytest
 ```
+
+## Troubleshooting
+
+1. Copie el `run_id` del mensaje de error.
+2. Abra **Corridas** y busque la corrida. Lea el paso con estado `error`.
+3. Si la causa no está clara, active el **modo debug** en Configuración y repita la acción.
+4. Exporte la corrida (ZIP) si necesita ayuda.
+
+ADVERTENCIA: el modo debug guarda el texto del CV en `~/.lazarus/logs/debug/`. Desactívelo al terminar.
+
+## Hoja de ruta
+
+| Fase | Función |
+|---|---|
+| 2 | Mejoras al CV |
+| 3 | Tracker de vacantes |
+| 4 | Preparación de entrevista |
+| 5 | Sincronización del perfil de LinkedIn |
+
+## Estado
+
+MVP en pruebas. Pendientes: `dataset_id` de Indeed y Glassdoor, y validar el mapeo de campos de Bright Data
+con respuestas reales.
