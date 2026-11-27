@@ -1,54 +1,19 @@
-"""Lazarus: página de inicio y estado del sistema."""
+"""Lazarus: punto de entrada. Define el menú y los nombres de las páginas."""
 import streamlit as st
 
-from lazarus import __version__
-from lazarus.claude_client import health
-from lazarus.ui import claude_panel, page
-
-app = page("Lazarus", "🔎")
-st.caption(f"Versión {__version__} · Datos en `{app.cfg['paths']['data']}`")
-
-st.subheader("Estado del sistema")
-c1, c2, c3 = st.columns(3)
-
-with c1:
-    h = st.session_state.get("claude_health") or health(app.cfg["claude"]["binary"])
-    st.session_state["claude_health"] = h
-    if h["ok"]:
-        st.caption(f"Claude Code {h['version']}")
-        claude_panel(app, key="home")
-    else:
-        st.error("Claude Code no está instalado.")
-        st.link_button("Descargar Claude Code", "https://claude.com/download")
-    if h.get("warning"):
-        st.warning(h["warning"])
-    if st.button("Volver a comprobar"):
-        st.session_state.pop("claude_health", None)
-        st.session_state.pop("claude_auth", None)
-        st.rerun()
-
-with c2:
-    for name, key in (("Bright Data", "brightdata"), ("Firecrawl", "firecrawl")):
-        if app.cfg["keys"][key]:
-            st.success(f"Key de {name}: presente")
-        else:
-            st.error(f"Key de {name}: falta")
-    if not all(app.cfg["keys"].values()):
-        st.page_link("pages/6_Configuracion.py", label="Cargar las claves en Configuración", icon="⚙️")
-
-with c3:
-    cv = app.active_cv()
-    if cv:
-        st.success(f"CV activo: {cv['filename']}")
-    else:
-        st.warning("No hay CV. Vaya a la página CV.")
-
-st.subheader("Recorrido")
-st.markdown(
-    "1. **CV**: suba su CV en PDF o DOCX.\n"
-    "2. **Buscar**: elija rol, ubicación y fuentes.\n"
-    "3. **Vacantes**: revise el ranking, el score y las razones.\n"
-    "4. **Carta**: genere, edite y descargue la carta.\n"
-    "5. **Mercado**: vea qué piden las empresas.\n\n"
-    "Lazarus nunca aplica por usted. Use el enlace original de cada vacante para aplicar."
-)
+pages = {
+    "Búsqueda de empleo": [
+        st.Page("pages/0_Inicio.py", title="Inicio", icon="🏠", default=True),
+        st.Page("pages/1_CV.py", title="Mi CV", icon="📄"),
+        st.Page("pages/2_Buscar.py", title="Buscar empleo", icon="🔍"),
+        st.Page("pages/3_Vacantes.py", title="Vacantes recomendadas", icon="⭐"),
+        st.Page("pages/4_Carta.py", title="Carta de presentación", icon="✉️"),
+        st.Page("pages/8_Entrevista.py", title="Preparar entrevista", icon="🎯"),
+        st.Page("pages/5_Mercado.py", title="Qué pide el mercado", icon="📊"),
+    ],
+    "Ajustes": [
+        st.Page("pages/6_Configuracion.py", title="Configuración", icon="⚙️"),
+        st.Page("pages/7_Corridas.py", title="Actividad y diagnóstico", icon="🧭"),
+    ],
+}
+st.navigation(pages).run()

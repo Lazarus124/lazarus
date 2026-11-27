@@ -24,6 +24,14 @@ class DB:
         self._con.execute("PRAGMA foreign_keys = ON")
         self._con.execute("PRAGMA journal_mode = WAL")
         self._con.executescript(SCHEMA.read_text(encoding="utf-8"))
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Agrega columnas nuevas a bases creadas con versiones anteriores."""
+        cols = {r[1] for r in self._con.execute("PRAGMA table_info(search)")}
+        if "remote" not in cols:
+            self._con.execute("ALTER TABLE search ADD COLUMN remote INTEGER NOT NULL DEFAULT 0")
+            self._con.commit()
 
     def execute(self, sql: str, params: tuple | list = ()) -> sqlite3.Cursor:
         with self._lock:

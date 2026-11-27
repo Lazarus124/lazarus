@@ -26,7 +26,7 @@ class FirecrawlSource:
 
     def available(self) -> tuple[bool, str]:
         if not self.api_key:
-            return False, "Falta FIRECRAWL_API_KEY en .env"
+            return False, "Falta la clave de Firecrawl (en Configuración)"
         return True, ""
 
     def cache_get(self, url: str) -> str | None:
@@ -43,14 +43,17 @@ class FirecrawlSource:
             (url, markdown, now()),
         )
 
-    def search(self, keyword: str, location: str, hosts: list[str], known_urls: set[str], run: Run):
+    def search(self, keyword: str, location: str, hosts: list[str], known_urls: set[str], run: Run,
+               max_pages: int | None = None):
         """Devuelve (jobs, créditos usados)."""
         if not hosts:
             return [], 0
         query = f"{keyword} {location}".strip()
+        max_pages = max_pages or self.cfg["max_scrapes"]
+        limit = min(100, max(self.cfg["search_limit"], max_pages * 2))  # más resultados para elegir páginas nuevas
         with run.step("firecrawl.search", query=query, hosts=len(hosts)) as st:
             try:
-                res = self.client.search(query, include_domains=hosts, limit=self.cfg["search_limit"])
+                res = self.client.search(query, include_domains=hosts, limit=limit)
             except Exception as exc:  # noqa: BLE001 - el SDK lanza varios tipos
                 raise SourceError(f"Firecrawl search: {exc}") from exc
             web = list(getattr(res, "web", None) or [])
@@ -67,7 +70,7 @@ class FirecrawlSource:
         jobs: list[RawJob] = []
         with run.step("firecrawl.scrape", candidates=len(new)) as st:
             cached = scraped = failed = 0
-            for url, title in new[: self.cfg["max_scrapes"]]:
+            for url, title in new[:max_pages]:
                 md = self.cache_get(url)
                 if md is None:
                     try:
@@ -85,3 +88,56 @@ class FirecrawlSource:
                     jobs.append(RawJob(source=f"web:{host_of(url)}", url=url, title=title, description=md))
             st.set(scraped=scraped, cache_hits=cached, failed=failed, credits=scraped)
         return jobs, credits + scraped
+
+    # ------------------------------------------------------------- otros usos
+    def research(self, queries: list[str], run: Run, max_pages: int = 3, per_query: int = 5) -> tuple[list[dict], int]:
+        """Búsqueda web abierta (sin lista de dominios) para investigar una empresa.
+        Devuelve (fuentes, créditos). Cada fuente: title, url, text."""
+        sources: dict[str, dict] = {}
+        credits = 0
+        with run.step("firecrawl.research", queries=len(queries)) as st:
+            for q in queries:
+                try:
+                    res = self.client.search(q, limit=per_query)
+                except Exception as exc:  # noqa: BLE001
+                    raise SourceError(f"Firecrawl search: {exc}") from exc
+                web = list(getattr(res, "web", None) or [])
+                credits += firecrawl_search_credits(len(web))
+                for r in web:
+                    url = canonical_url(r.url)
+                    if url not in sources:
+                        sources[url] = {"title": getattr(r, "title", "") or "", "url": url,
+                                        "text": getattr(r, "description", "") or ""}
+            scraped = 0
+            for src in list(sources.values())[:max_pages]:
+                md = self.cache_get(src["url"])
+                if md is None:
+                    try:
+                        md = getattr(self.client.scrape(src["url"], formats=["markdown"], only_main_content=True),
+                                     "markdown", "") or ""
+                        scraped += 1
+                        if md:
+                            self.cache_put(src["url"], md)
+                    except Exception:  # noqa: BLE001 - una página fallida no corta la investigación
+                        continue
+                src["text"] = (md or src["text"])[:6000]
+            credits += scraped
+            st.set(sources=len(sources), scraped=scraped, credits=credits)
+        return list(sources.values()), credits
+
+    def scrape_one(self, url: str, run: Run) -> tuple[str, int]:
+        """Lee una página (para una posición que trae el usuario). Devuelve (markdown, créditos)."""
+        with run.step("firecrawl.scrape_one") as st:
+            md = self.cache_get(url)
+            if md is not None:
+                st.set(cache_hit=True)
+                return md, 0
+            try:
+                doc = self.client.scrape(url, formats=["markdown"], only_main_content=True)
+            except Exception as exc:  # noqa: BLE001
+                raise SourceError(f"No pude leer la página: {exc}") from exc
+            md = getattr(doc, "markdown", "") or ""
+            if md:
+                self.cache_put(url, md)
+            st.set(chars=len(md))
+            return md, 1

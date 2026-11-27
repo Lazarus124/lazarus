@@ -19,7 +19,7 @@ y muestra qué piden las empresas. Todo corre en la computadora del usuario. La 
 | Ranking | Claude analiza cada vacante. Python calcula un score de 0 a 100. Claude explica las 10 mejores. |
 | Carta | Claude escribe una carta con hechos del CV. El usuario la edita y la descarga en DOCX. |
 | Mercado | Top skills, brecha CV vs mercado, seniority, modalidad y salarios publicados. |
-| Corridas | Cada acción tiene un `run_id`. Logs con pasos, tiempos, consumo y errores. Vista de rendimiento. |
+| Actividad y diagnóstico | Cada acción tiene un `run_id`. Logs con pasos, tiempos, consumo y errores. Vista de rendimiento. |
 | Configuración | Claves de API cifradas (DPAPI en Windows), datasets de Bright Data, dominios, sesión de Claude. |
 
 ## Arquitectura
@@ -98,7 +98,7 @@ tests/                    pytest
 ## Troubleshooting
 
 1. Copie el `run_id` del mensaje de error.
-2. Abra **Corridas** y busque la corrida. Lea el paso con estado `error`.
+2. Abra **Actividad y diagnóstico** y busque la corrida. Lea el paso con estado `error`.
 3. Si la causa no está clara, active el **modo debug** en Configuración y repita la acción.
 4. Exporte la corrida (ZIP) si necesita ayuda.
 

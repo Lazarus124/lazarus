@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "required": ["overview", "stages", "topics_to_review", "points_to_clarify"],
+  "properties": {
+    "overview": {"type": "string"},
+    "stages": {"type": "array", "minItems": 3, "maxItems": 7, "items": {
+      "type": "object",
+      "required": ["name", "interviewer", "goal", "format", "evaluates", "questions", "tips", "questions_to_ask"],
+      "properties": {
+        "name": {"type": "string"},
+        "interviewer": {"type": "string"},
+        "goal": {"type": "string"},
+        "format": {"type": "string"},
+        "evaluates": {"type": "array", "items": {"type": "string"}},
+        "questions": {"type": "array", "items": {"type": "object", "required": ["question", "why", "answer_hint"],
+          "properties": {"question": {"type": "string"}, "why": {"type": "string"}, "answer_hint": {"type": "string"}},
+          "additionalProperties": false}},
+        "tips": {"type": "array", "items": {"type": "string"}},
+        "questions_to_ask": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false}},
+    "topics_to_review": {"type": "array", "items": {"type": "string"}},
+    "points_to_clarify": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

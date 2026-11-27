@@ -13,8 +13,8 @@ poll_timeout_s = 300
 # dataset_id de cada scraper "discover by keyword". Vacío = fuente desactivada.
 [brightdata.datasets]
 linkedin = "gd_lpfll7v5hcqtkxl6l"
-indeed = ""     # copiar del panel de Bright Data
-glassdoor = ""  # copiar del panel de Bright Data
+indeed = "gd_l4dx9j9sscpvs7no2"     # Indeed jobs (página del scraper de Bright Data)
+glassdoor = "gd_lpfbbndm1xnopbrcr0"  # Glassdoor jobs (plantilla oficial de Bright Data)
 
 # Campos de entrada de cada dataset. {keyword}, {location} y {country} se reemplazan.
 # Verificar con la documentación de cada dataset.
@@ -22,11 +22,13 @@ glassdoor = ""  # copiar del panel de Bright Data
 keyword = "{keyword}"
 location = "{location}"
 country = "{country}"
+remote = "{remote}"   # "Remote" en búsquedas de solo remoto
 
 [brightdata.inputs.indeed]
+country = "{country}"
+domain = "{indeed_domain}"
 keyword_search = "{keyword}"
 location = "{location}"
-country = "{country}"
 
 [brightdata.inputs.glassdoor]
 keyword = "{keyword}"

@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "required": ["name", "headline", "contact", "summary", "skills", "experience", "education", "certifications",
+               "languages", "notes_for_user"],
+  "properties": {
+    "name": {"type": "string"},
+    "headline": {"type": "string"},
+    "contact": {"type": "string"},
+    "summary": {"type": "string"},
+    "skills": {"type": "array", "items": {"type": "string"}},
+    "experience": {"type": "array", "items": {"type": "object", "required": ["role", "company", "dates", "bullets"],
+      "properties": {"role": {"type": "string"}, "company": {"type": "string"}, "dates": {"type": "string"},
+                     "bullets": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": false}},
+    "education": {"type": "array", "items": {"type": "object", "required": ["title", "institution", "dates"],
+      "properties": {"title": {"type": "string"}, "institution": {"type": "string"}, "dates": {"type": "string"}},
+      "additionalProperties": false}},
+    "certifications": {"type": "array", "items": {"type": "string"}},
+    "languages": {"type": "array", "items": {"type": "string"}},
+    "notes_for_user": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

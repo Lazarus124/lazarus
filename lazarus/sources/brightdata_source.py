@@ -16,6 +16,11 @@ from ..runlog import Run
 
 API = "https://api.brightdata.com/datasets/v3"
 
+# Bright Data exige "location" en LinkedIn, Indeed y Glassdoor. Sin ciudad se usa el país (en inglés, sin acentos).
+COUNTRY_EN = {"MX": "Mexico", "AR": "Argentina", "CO": "Colombia", "CL": "Chile", "PE": "Peru", "BR": "Brazil",
+              "UY": "Uruguay", "EC": "Ecuador", "CR": "Costa Rica", "GT": "Guatemala", "PA": "Panama",
+              "DO": "Dominican Republic", "BO": "Bolivia", "PY": "Paraguay", "VE": "Venezuela", "US": "United States"}
+
 # Campos candidatos en orden de preferencia, por fuente.
 FIELD_MAP = {
     "linkedin": {
@@ -95,9 +100,9 @@ class BrightDataSource:
 
     def available(self, source: str) -> tuple[bool, str]:
         if not self.api_key:
-            return False, "Falta BRIGHTDATA_API_KEY en .env"
+            return False, "Falta la clave de Bright Data (en Configuración)"
         if not self.cfg["datasets"].get(source):
-            return False, f"Falta el dataset_id de {source} en config.toml"
+            return False, f"Falta configurar {source.capitalize()} (Configuración → Avanzado)"
         return True, ""
 
     def _headers(self) -> dict:
@@ -111,16 +116,60 @@ class BrightDataSource:
         if resp.status_code == 429:
             raise SourceError("Bright Data: límite de velocidad (429)")
         if resp.status_code >= 400:
-            raise SourceError(f"Bright Data: HTTP {resp.status_code} en {what}: {resp.text[:300]}")
+            raise SourceError(f"Bright Data: HTTP {resp.status_code} en {what}: {resp.text[:800]}")
 
-    def build_input(self, source: str, keyword: str, location: str, country: str) -> dict:
+    def build_input(self, source: str, keyword: str, location: str, country: str, remote: bool = False) -> dict:
         template = self.cfg.get("inputs", {}).get(source, {"keyword": "{keyword}", "location": "{location}"})
-        values = {"keyword": keyword, "location": location or "", "country": country or ""}
+        cc = (country or "").upper()
+        if remote and not any("{remote}" in v for v in template.values()):
+            # Indeed y Glassdoor no tienen filtro de remoto: se agrega la palabra a la búsqueda.
+            keyword = f"{keyword} {'remote' if cc == 'US' else 'remoto'}"
+        values = {"remote": "Remote" if remote else "", "keyword": keyword, "location": location.strip() or COUNTRY_EN.get(cc, "Latin America"), "country": cc,
+                  # Indeed usa un dominio por país: mx.indeed.com, ar.indeed.com; Estados Unidos usa indeed.com
+                  "indeed_domain": "indeed.com" if cc in ("", "US") else f"{cc.lower()}.indeed.com"}
         return {k: v.format(**values) for k, v in template.items() if v.format(**values) != ""}
 
-    def search(self, source: str, keyword: str, location: str, country: str, run: Run) -> tuple[list[RawJob], int]:
-        """Devuelve (vacantes, registros cobrados)."""
-        with run.step(f"brightdata.{source}", keyword=keyword, location=location, country=country) as st:
+    def _wait_snapshot(self, snapshot_id: str, st) -> httpx.Response:
+        deadline = time.monotonic() + self.cfg["poll_timeout_s"]
+        polls = 0
+        while True:
+            polls += 1
+            pr = self.client.get(f"{API}/progress/{snapshot_id}", headers=self._headers())
+            self._check(pr, "progress")
+            state = pr.json().get("status")
+            if state == "ready":
+                break
+            if state == "failed":
+                raise SourceError(f"Bright Data: el snapshot {snapshot_id} falló")
+            if time.monotonic() > deadline:
+                st.set(polls=polls)
+                raise SourceError(f"Bright Data: tiempo agotado esperando {snapshot_id}")
+            self.sleep(self.cfg["poll_interval_s"])
+        st.set(polls=polls)
+        sr = self.client.get(f"{API}/snapshot/{snapshot_id}", params={"format": "json"}, headers=self._headers())
+        self._check(sr, "snapshot")
+        return sr
+
+    def collect_url(self, source: str, url: str, run: Run) -> RawJob | None:
+        """Trae una sola posición por su URL (por ejemplo, un link de LinkedIn que pega el usuario)."""
+        with run.step(f"brightdata.{source}.url") as st:
+            params = {"dataset_id": self.cfg["datasets"][source], "include_errors": "true"}
+            resp = self.client.post(f"{API}/trigger", params=params, json=[{"url": url}], headers=self._headers())
+            self._check(resp, "trigger")
+            snapshot_id = resp.json().get("snapshot_id")
+            if not snapshot_id:
+                raise SourceError(f"Bright Data: respuesta sin snapshot_id: {resp.text[:300]}")
+            records = self._wait_snapshot(snapshot_id, st).json()
+            if isinstance(records, dict):
+                records = records.get("data") or [records]
+            jobs = [j for j in (map_record(source, r) for r in records if isinstance(r, dict) and not r.get("error")) if j]
+            st.set(records=len(records), mapped=len(jobs))
+            return jobs[0] if jobs else None
+
+    def search(self, source: str, keyword: str, location: str, country: str, run: Run,
+               remote: bool = False) -> tuple[list[RawJob], int, dict]:
+        """Devuelve (vacantes, registros cobrados, diagnóstico)."""
+        with run.step(f"brightdata.{source}", keyword=keyword, location=location, country=country, remote=remote) as st:
             params = {
                 "dataset_id": self.cfg["datasets"][source],
                 "type": "discover_new",
@@ -128,37 +177,26 @@ class BrightDataSource:
                 "include_errors": "true",
                 "limit_per_input": str(self.cfg["limit_per_source"]),
             }
-            body = [self.build_input(source, keyword, location, country)]
+            body = [self.build_input(source, keyword, location, country, remote)]
+            st.set(input=body[0])
             resp = self.client.post(f"{API}/trigger", params=params, json=body, headers=self._headers())
             self._check(resp, "trigger")
             snapshot_id = resp.json().get("snapshot_id")
             if not snapshot_id:
                 raise SourceError(f"Bright Data: respuesta sin snapshot_id: {resp.text[:300]}")
             st.set(snapshot_id=snapshot_id)
-
-            deadline = time.monotonic() + self.cfg["poll_timeout_s"]
-            polls = 0
-            while True:
-                polls += 1
-                pr = self.client.get(f"{API}/progress/{snapshot_id}", headers=self._headers())
-                self._check(pr, "progress")
-                state = pr.json().get("status")
-                if state == "ready":
-                    break
-                if state == "failed":
-                    raise SourceError(f"Bright Data: el snapshot {snapshot_id} falló")
-                if time.monotonic() > deadline:
-                    st.set(polls=polls)
-                    raise SourceError(f"Bright Data: tiempo agotado esperando {snapshot_id}")
-                self.sleep(self.cfg["poll_interval_s"])
-            st.set(polls=polls)
-
-            sr = self.client.get(f"{API}/snapshot/{snapshot_id}", params={"format": "json"}, headers=self._headers())
-            self._check(sr, "snapshot")
+            sr = self._wait_snapshot(snapshot_id, st)
             records = sr.json()
             if isinstance(records, dict):
                 records = records.get("data") or records.get("records") or []
             ok = [r for r in records if isinstance(r, dict) and not r.get("error")]
             jobs = [j for j in (map_record(source, r) for r in ok) if j]
-            st.set(records=len(records), errors=len(records) - len(ok), mapped=len(jobs))
-            return jobs, len(records)
+            diag = {"records": len(records), "errors": len(records) - len(ok), "mapped": len(jobs)}
+            bad = [r for r in records if isinstance(r, dict) and r.get("error")]
+            if bad:  # motivo de los errores que informa Bright Data (sin datos personales)
+                diag["error_samples"] = sorted({str(r.get("error_code") or r.get("error"))[:120] for r in bad})[:5]
+            if ok and len(jobs) < len(ok):  # registros que no se pudieron leer: guardar solo los nombres de campos
+                diag["unmapped"] = len(ok) - len(jobs)
+                diag["sample_keys"] = sorted(ok[0].keys())[:60]
+            st.set(**diag)
+            return jobs, len(records), diag

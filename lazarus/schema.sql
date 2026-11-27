@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS search (
     location TEXT,
     country TEXT,
     sources_json TEXT NOT NULL,
+    remote INTEGER NOT NULL DEFAULT 0,
     run_id TEXT,
     created_at TEXT NOT NULL
 );
@@ -121,4 +122,35 @@ CREATE INDEX IF NOT EXISTS idx_run_step_run ON run_step(run_id);
 CREATE TABLE IF NOT EXISTS setting (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS company_research (
+    company_key TEXT PRIMARY KEY,
+    company TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tailored_cv (
+    id INTEGER PRIMARY KEY,
+    cv_id INTEGER NOT NULL REFERENCES cv(id),
+    job_id INTEGER NOT NULL REFERENCES job(id),
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS interview_prep (
+    id INTEGER PRIMARY KEY,
+    cv_id INTEGER NOT NULL REFERENCES cv(id),
+    job_id INTEGER NOT NULL REFERENCES job(id),
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS interview_stage (
+    cv_id INTEGER NOT NULL REFERENCES cv(id),
+    job_id INTEGER NOT NULL REFERENCES job(id),
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 99,
+    status TEXT NOT NULL DEFAULT 'pendiente',   -- pendiente | hecha
+    notes TEXT NOT NULL DEFAULT '',
+    result_json TEXT,                           -- preparación a fondo de la etapa
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (cv_id, job_id, name)
 );

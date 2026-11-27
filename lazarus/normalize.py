@@ -99,26 +99,31 @@ def is_brightdata(source: str) -> bool:
     return not source.startswith("web:")
 
 
+def insert_job(db: DB, rj: RawJob) -> tuple[int, bool]:
+    """Guarda una vacante si su URL es nueva. Devuelve (job_id, es_nueva)."""
+    url = canonical_url(rj.url)
+    row = db.one("SELECT id FROM job WHERE url = ?", (url,))
+    if row:
+        return row["id"], False
+    cur = db.execute(
+        "INSERT INTO job (url, source, title, company, location, country, description, posted_at,"
+        " fetched_at, raw_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (url, rj.source, rj.title, rj.company, rj.location, rj.country, rj.description,
+         rj.posted_at, now(), json.dumps(rj.raw, ensure_ascii=False, default=str)[:200_000]),
+    )
+    job_id = cur.lastrowid
+    if rj.title and rj.company:
+        assign_dedup(db, job_id, rj.title, rj.company, rj.country)
+    return job_id, True
+
+
 def insert_raw_jobs(db: DB, raw_jobs: list[RawJob], search_id: int) -> dict:
-    """Guarda las vacantes. Devuelve conteos. Dedup por URL al ingresar."""
+    """Guarda las vacantes de una búsqueda. Devuelve conteos. Dedup por URL al ingresar."""
     new, existing = 0, 0
     for rj in raw_jobs:
-        url = canonical_url(rj.url)
-        row = db.one("SELECT id FROM job WHERE url = ?", (url,))
-        if row:
-            job_id = row["id"]
-            existing += 1
-        else:
-            cur = db.execute(
-                "INSERT INTO job (url, source, title, company, location, country, description, posted_at,"
-                " fetched_at, raw_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (url, rj.source, rj.title, rj.company, rj.location, rj.country, rj.description,
-                 rj.posted_at, now(), json.dumps(rj.raw, ensure_ascii=False, default=str)[:200_000]),
-            )
-            job_id = cur.lastrowid
-            new += 1
-            if rj.title and rj.company:
-                assign_dedup(db, job_id, rj.title, rj.company, rj.country)
+        job_id, is_new = insert_job(db, rj)
+        new += is_new
+        existing += not is_new
         db.execute("INSERT OR IGNORE INTO search_result (search_id, job_id) VALUES (?,?)", (search_id, job_id))
     return {"new": new, "existing": existing}
 

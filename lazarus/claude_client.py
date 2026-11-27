@@ -43,6 +43,17 @@ def load_schema(task: str) -> dict:
     return json.loads((HERE / "schemas" / f"{task}.json").read_text(encoding="utf-8"))
 
 
+def workdir() -> Path:
+    """Carpeta vacía y fija donde corre `claude -p`.
+
+    No se usa una carpeta temporal por llamada: en Windows, claude.exe (o un proceso hijo)
+    puede seguir usando la carpeta al terminar y el borrado falla con WinError 32.
+    """
+    d = Path(tempfile.gettempdir()) / "lazarus-claude"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def resolve_binary(binary: str = "claude") -> str | None:
     """Busca la CLI: ruta configurada, PATH y ubicaciones típicas de Windows."""
     if binary and Path(binary).is_file():
@@ -98,11 +109,10 @@ class ClaudeClient:
 
     def _call(self, cmd, stdin, st, run, task, attempt, schema) -> dict:
         run.debug_dump(f"{task}-{attempt}-stdin.txt", stdin)
-        with tempfile.TemporaryDirectory() as tmp:
-            proc = self.runner(
-                cmd, input=stdin, capture_output=True, text=True, encoding="utf-8",
-                timeout=self.timeout, cwd=tmp, **NO_WINDOW,
-            )
+        proc = self.runner(
+            cmd, input=stdin, capture_output=True, text=True, encoding="utf-8",
+            timeout=self.timeout, cwd=str(workdir()), **NO_WINDOW,
+        )
         run.debug_dump(f"{task}-{attempt}-stdout.txt", proc.stdout)
         run.debug_dump(f"{task}-{attempt}-stderr.txt", proc.stderr)
         st.set(exit_code=proc.returncode, output_chars=len(proc.stdout or ""))
@@ -269,9 +279,8 @@ def test_call(binary: str = "claude", runner=subprocess.run, timeout: int = 90) 
     if not exe:
         return {"ok": False, "message": "No encuentro 'claude'."}
     try:
-        with tempfile.TemporaryDirectory() as tmp:
-            proc = runner([exe, "-p", "--output-format", "json"], input="Responde solo: ok", capture_output=True,
-                          text=True, encoding="utf-8", timeout=timeout, cwd=tmp, **NO_WINDOW)
+        proc = runner([exe, "-p", "--output-format", "json"], input="Responde solo: ok", capture_output=True,
+                      text=True, encoding="utf-8", timeout=timeout, cwd=str(workdir()), **NO_WINDOW)
         out = json.loads(proc.stdout)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "message": f"{type(exc).__name__}: {exc}"}

@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from lazarus.models import RawJob
+
 from lazarus import config
 from lazarus.claude_client import ClaudeClient
 from lazarus.services import Lazarus
@@ -31,6 +33,38 @@ def fake_outputs(stdin: str) -> dict:
         return {"reasons": ["Domina AWS y Linux."], "risks": ["No muestra Terraform."]}
     if stdin.startswith("Eres un redactor"):
         return {"greeting": "Estimado equipo de Acme:", "paragraphs": ["P1.", "P2.", "P3."], "closing": "Saludos cordiales."}
+    if stdin.startswith("Eres un analista que prepara a un candidato"):
+        url = stdin.split("URL: ", 1)[1].split("\n", 1)[0] if "URL: " in stdin else ""
+        return {"summary": "Acme es una empresa de software.", "what_they_do": "Software cloud.",
+                "size_and_locations": "200 empleados, México.", "products_and_tech": ["aws"],
+                "culture_and_reviews": "Opiniones positivas.", "recent_news": [], "red_flags": [],
+                "questions_to_ask": ["¿Cómo es el equipo?"], "ambiguity": None,
+                "sources": [{"title": "Sitio", "url": url}, {"title": "Inventada", "url": "https://inventada.com"}]}
+    if stdin.startswith("Eres un especialista en CV"):
+        return {"name": "María Ejemplo López", "headline": "Soporte cloud orientada a DevOps", "contact": "maria@example.com",
+                "summary": "Ingeniera de soporte cloud.", "skills": ["aws", "linux"],
+                "experience": [{"role": "Soporte técnico", "company": "Empresa X", "dates": "2023-2025",
+                                "bullets": ["Resolví incidentes en AWS."]}],
+                "education": [{"title": "Ingeniería", "institution": "UNAM", "dates": "2022"}],
+                "certifications": ["AWS Cloud Practitioner"], "languages": ["Español", "Inglés"],
+                "notes_for_user": ["Falta Terraform."]}
+    if stdin.startswith("Eres un coach de entrevistas laborales. Arma el plan"):
+        def stage(name, q):
+            return {"name": name, "interviewer": "Persona", "goal": "Validar", "format": "30 min", "evaluates": ["comunicación"],
+                    "questions": [{"question": q, "why": "Porque sí.", "answer_hint": "Use su experiencia."}],
+                    "tips": ["Llegue a tiempo"], "questions_to_ask": ["¿Cómo es el equipo?"]}
+        return {"overview": "Proceso de 3 etapas.",
+                "stages": [stage("Reclutador/a", "¿Por qué este puesto?"), stage("Hiring manager", "¿Qué es una VPC?"),
+                           stage("Técnica", "Diseñe una red en AWS")],
+                "topics_to_review": ["Terraform"], "points_to_clarify": []}
+    if stdin.startswith("Eres un coach de entrevistas laborales. Prepara a fondo"):
+        prev = stdin.split("<etapas_anteriores>", 1)[1]
+        return {"focus": "Profundizar en redes" + (" (usa notas previas)" if "me fue mal en redes" in prev else ""),
+                "questions": [{"question": "¿Cómo depura una VPC?", "why": "Redes.", "answer_hint": "Paso a paso.",
+                               "follow_up": "¿Y con peering?"}],
+                "tips": ["Dibuje la arquitectura"], "questions_to_ask": ["¿Qué stack usan?"]}
+    if stdin.startswith("Eres un entrevistador experimentado"):
+        return {"score": 3, "strengths": ["Clara"], "improvements": ["Dar un ejemplo"], "improved_answer": "Una VPC es..."}
     raise AssertionError("prompt desconocido")
 
 
@@ -61,7 +95,11 @@ class FakeBrightData:
     def available(self, source):
         return True, ""
 
-    def search(self, source, keyword, location, country, run):
+    def collect_url(self, source, url, run):
+        self.calls.append(("url", source, url))
+        return RawJob(source, url, "DevOps en Acme. AWS, Linux.", title="DevOps", company="Acme", country="MX")
+
+    def search(self, source, keyword, location, country, run, remote=False):
         from lazarus.models import SourceError
         self.calls.append((source, keyword, location, country))
         with run.step(f"brightdata.{source}") as st:

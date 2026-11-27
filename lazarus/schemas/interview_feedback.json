@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "required": ["score", "strengths", "improvements", "improved_answer"],
+  "properties": {
+    "score": {"type": "integer", "minimum": 1, "maximum": 5},
+    "strengths": {"type": "array", "items": {"type": "string"}},
+    "improvements": {"type": "array", "items": {"type": "string"}},
+    "improved_answer": {"type": "string"}
+  },
+  "additionalProperties": false
+}

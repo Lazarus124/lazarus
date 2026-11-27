@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "required": ["focus", "questions", "tips", "questions_to_ask"],
+  "properties": {
+    "focus": {"type": "string"},
+    "questions": {"type": "array", "items": {"type": "object", "required": ["question", "why", "answer_hint", "follow_up"],
+      "properties": {"question": {"type": "string"}, "why": {"type": "string"}, "answer_hint": {"type": "string"},
+                     "follow_up": {"type": "string"}}, "additionalProperties": false}},
+    "tips": {"type": "array", "items": {"type": "string"}},
+    "questions_to_ask": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

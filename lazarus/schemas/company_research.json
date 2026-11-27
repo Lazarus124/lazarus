@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "required": ["summary", "what_they_do", "size_and_locations", "products_and_tech", "culture_and_reviews",
+               "recent_news", "red_flags", "questions_to_ask", "ambiguity", "sources"],
+  "properties": {
+    "summary": {"type": "string"},
+    "what_they_do": {"type": "string"},
+    "size_and_locations": {"type": "string"},
+    "products_and_tech": {"type": "array", "items": {"type": "string"}},
+    "culture_and_reviews": {"type": "string"},
+    "recent_news": {"type": "array", "items": {"type": "string"}},
+    "red_flags": {"type": "array", "items": {"type": "string"}},
+    "questions_to_ask": {"type": "array", "items": {"type": "string"}},
+    "ambiguity": {"type": ["string", "null"]},
+    "sources": {"type": "array", "items": {"type": "object", "required": ["title", "url"],
+                "properties": {"title": {"type": "string"}, "url": {"type": "string"}}, "additionalProperties": false}}
+  },
+  "additionalProperties": false
+}

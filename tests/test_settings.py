@@ -30,6 +30,7 @@ def test_dataset_setting_enables_source(make_app):
     from lazarus.sources.brightdata_source import BrightDataSource
     app = make_app()
     app._injected["brightdata"] = False
+    app.cfg["brightdata"]["datasets"]["indeed"] = ""  # sin valor por defecto
     app.apply_settings()
     assert isinstance(app.brightdata, BrightDataSource)
     assert not app.source_status()["indeed"]["ok"]

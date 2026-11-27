@@ -52,8 +52,9 @@ def test_t2_brightdata_maps_fixture_and_flow(tmp_path):
     db = DB(tmp_path / "t.db")
     log = RunLogger(db, tmp_path / "logs")
     with log.run("search") as run:
-        jobs, units = src.search("linkedin", "devops", "Guadalajara", "MX", run)
+        jobs, units, diag = src.search("linkedin", "devops", "Guadalajara", "MX", run)
     assert units == 3 and len(jobs) == 2
+    assert diag["errors"] == 1 and diag["error_samples"] == ["dead_page"] and "unmapped" not in diag
     assert jobs[0].title == "DevOps Engineer Jr" and jobs[0].company == "Acme" and jobs[0].country == "MX"
     assert "<" not in jobs[0].description
     step = db.one("SELECT * FROM run_step WHERE name = 'brightdata.linkedin'")
@@ -63,7 +64,7 @@ def test_t2_brightdata_maps_fixture_and_flow(tmp_path):
 def test_t2_brightdata_missing_dataset_disabled():
     src = BrightDataSource("k", {"datasets": {"indeed": ""}})
     ok, why = src.available("indeed")
-    assert not ok and "dataset_id" in why
+    assert not ok and "Indeed" in why
     assert map_record("linkedin", {"url": "x"}) is None
 
 
@@ -199,3 +200,44 @@ def test_claude_auth_error_is_not_retried(tmp_path):
         with log.run("cv_upload") as run:
             ClaudeClient("claude", 5, 1, runner=runner).run("cv_profile", "<cv>x</cv>", run)
     assert len(calls) == 1 and "Iniciar sesión en Claude" in str(ei.value)
+
+
+def test_claude_runs_in_fixed_workdir_without_cleanup(tmp_path):
+    """La carpeta de trabajo es fija: no hay borrado que falle en Windows (WinError 32)."""
+    from lazarus.claude_client import workdir
+    runner = FakeRunner()
+    db = DB(tmp_path / "t.db")
+    log = RunLogger(db, tmp_path / "logs")
+    with log.run("cv_upload") as run:
+        ClaudeClient("claude", 5, 0, runner=runner).run("cv_profile", "<cv>x</cv>", run)
+    assert runner.calls[0]["kw"]["cwd"] == str(workdir())
+    assert workdir().is_dir()
+
+
+def test_indeed_input_uses_country_domain():
+    from lazarus import config
+    cfg = config.load()["brightdata"]
+    src = BrightDataSource("k", cfg)
+    assert src.build_input("indeed", "devops", "Monterrey", "mx") == {
+        "country": "MX", "domain": "mx.indeed.com", "keyword_search": "devops", "location": "Monterrey"}
+    assert src.build_input("indeed", "devops", "", "")["domain"] == "indeed.com"
+    assert all(cfg["datasets"][s].startswith("gd_") for s in ("linkedin", "indeed", "glassdoor"))
+
+
+def test_brightdata_location_required_uses_country():
+    """Bright Data responde 400 'location: Required field' si va vacía: se usa el país."""
+    from lazarus import config
+    src = BrightDataSource("k", config.load()["brightdata"])
+    for source in ("linkedin", "indeed", "glassdoor"):
+        assert src.build_input(source, "arquitecto de nube", "", "AR")["location"] == "Argentina"
+    assert src.build_input("linkedin", "devops", "Córdoba", "AR")["location"] == "Córdoba"
+    assert src.build_input("linkedin", "devops", "", "")["location"] == "Latin America"
+
+
+def test_brightdata_remote_inputs():
+    from lazarus import config
+    src = BrightDataSource("k", config.load()["brightdata"])
+    assert src.build_input("linkedin", "devops", "", "AR", remote=True)["remote"] == "Remote"
+    assert "remote" not in src.build_input("linkedin", "devops", "", "AR")
+    assert src.build_input("indeed", "devops", "", "AR", remote=True)["keyword_search"] == "devops remoto"
+    assert src.build_input("glassdoor", "devops", "", "US", remote=True)["keyword"] == "devops remote"
