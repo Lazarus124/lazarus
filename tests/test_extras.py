@@ -84,3 +84,26 @@ def test_worker_call_task(make_app):
     w.wait()
     t = w.latest_for_key(f"cv:{jid}")
     assert t.status == "done" and t.result["name"] == "María Ejemplo López"
+
+
+def test_user_picks_stages_and_what_to_prepare(make_app):
+    app, _, _, ranking = _ready(make_app)
+    jid = ranking[0]["job_id"]
+    # Elige etapas: quedan en el orden típico y la propia al final; nada se genera todavía
+    app.set_stages(jid, ["Entrevista técnica", "Con el cliente", "Reclutador/a"])
+    stages = app.interview_stages(jid)
+    assert [s["name"] for s in stages] == ["Reclutador/a", "Entrevista técnica", "Con el cliente"]
+    assert stages[0]["plan"]["interviewer"].startswith("Reclutador")  # descripción del catálogo
+    assert stages[2]["plan"] is None and all(s["deep"] is None for s in stages)
+    calls = len(app._runner.calls)
+    # Prepara solo la técnica
+    app.prepare_stage(jid, "Entrevista técnica")
+    assert len(app._runner.calls) == calls + 1
+    assert [bool(s["deep"]) for s in app.interview_stages(jid)] == [False, True, False]
+    # Quitar etapas: la vacía se borra, la preparada se conserva
+    kept = app.set_stages(jid, ["Reclutador/a"])
+    assert kept == ["Entrevista técnica"]
+    assert [s["name"] for s in app.interview_stages(jid)] == ["Reclutador/a", "Entrevista técnica"]
+    stages = app.interview_stages(jid)
+    text = "\n".join(p.text for p in Document(io.BytesIO(prep_to_docx(None, "DevOps · Acme", stages))).paragraphs)
+    assert "ETAPA 1: RECLUTADOR/A" in text and "Todavía sin preparar." in text and "¿Cómo depura una VPC?" in text

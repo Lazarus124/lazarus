@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from pathlib import Path
 
 import streamlit as st
 
@@ -16,13 +17,63 @@ from .services import Lazarus, run_id_of
 SERVICE_LABELS = {"brightdata": "LinkedIn, Indeed y Glassdoor", "firecrawl": "Portales de empleo"}
 SENIORITY = {"intern": "Practicante", "junior": "Junior", "mid": "Semi senior", "senior": "Senior",
              "lead": "Líder", "unknown": "Sin dato", None: "Sin dato"}
+# Nivel con años de experiencia, para quien no conoce los términos de la industria.
+LEVEL_LABELS = {"intern": "Practicante · sin experiencia", "junior": "Junior · 0 a 2 años",
+                "mid": "Semi senior · 2 a 5 años", "senior": "Senior · 5 a 8 años",
+                "lead": "Líder · más de 8 años", "unknown": "Sin dato", None: "Sin dato"}
+TRACK_LABELS = {"favorito": "⭐ Favorita", "aplicado": "✅ Me postulé", "no_me_gusta": "👎 No me gusta",
+                "no_mostrar": "🚫 Oculta"}
+
+
+def open_folder(path) -> bool:
+    """Abre una carpeta en el Explorador de Windows. Devuelve False en otros sistemas."""
+    Path(path).mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        os.startfile(str(path))  # noqa: S606 - carpeta local del usuario
+        return True
+    return False
+
+
+def tracking_buttons(app: Lazarus, job_id: int, current: str | None, key: str) -> None:
+    """Botones para marcar una posición: favorita, me postulé, no me gusta, ocultar."""
+    cols = st.columns(4)
+    for col, status in zip(cols, ("favorito", "aplicado", "no_me_gusta", "no_mostrar")):
+        active = current == status
+        if col.button(TRACK_LABELS[status], key=f"tr_{status}_{key}", type="primary" if active else "secondary",
+                      use_container_width=True, help="Toque otra vez para quitar la marca" if active else None):
+            res = app.set_status(job_id, None if active else status)
+            if res.get("files"):
+                st.session_state[f"saved_{job_id}"] = res["files"]
+            st.rerun()
+
+
+FRESHNESS = {None: "Cualquier fecha", "day": "Últimas 24 horas", "3days": "Últimos 3 días",
+             "week": "Última semana", "month": "Último mes"}
+
+
+def age_label(posted_on: str | None) -> str:
+    """'hoy', 'ayer', 'hace 5 días'… desde una fecha AAAA-MM-DD."""
+    if not posted_on:
+        return "Sin fecha"
+    from datetime import date
+    try:
+        days = (date.today() - date.fromisoformat(posted_on)).days
+    except ValueError:
+        return "Sin fecha"
+    return "Hoy" if days <= 0 else "Ayer" if days == 1 else f"Hace {days} días" if days < 31 else f"Hace {days // 30} meses"
+
+
+EMPLOYMENT = {"full_time": "Tiempo completo", "part_time": "Part time", "contract": "Por proyecto",
+              "internship": "Pasantía", "unknown": "Sin dato", None: "Sin dato"}
 MODALITY = {"remote": "Remoto", "hybrid": "Híbrido", "onsite": "Presencial", "unknown": "Sin dato", None: "Sin dato"}
 RUN_KINDS = {"search": "Búsqueda", "analyze": "Revisión de vacantes", "explain": "Explicaciones",
              "cover_letter": "Carta", "cv_upload": "Carga de CV", "cv_activate": "Cambio de CV",
              "settings": "Configuración", "key_test": "Prueba de conexión",
              "company_research": "Investigación de empresa", "tailor_cv": "CV a medida",
              "job_from_url": "Posición desde un link", "interview_prep": "Guía de entrevista",
-             "interview_feedback": "Práctica de entrevista"}
+             "interview_feedback": "Práctica de entrevista", "verify_open": "Verificar posición",
+             "tracking": "Seguimiento", "interview_stage": "Preparación de etapa",
+             "learning_plan": "Plan de estudio", "tutor_chat": "Chat con el tutor"}
 RUN_STATUS = {"ok": "Correcta", "error": "Con error", "running": "En curso"}
 
 
@@ -36,11 +87,17 @@ def get_app() -> Lazarus:
     return app
 
 
-def page(title: str, icon: str = "") -> Lazarus:
-    st.set_page_config(page_title=f"Lazarus · {title}", page_icon=icon or None, layout="wide")
+ASSETS = Path(__file__).parent / "assets"
+ICON = str(ASSETS / "icon.png")
+
+
+def page(title: str, icon: str = "", show_title: bool = True) -> Lazarus:
+    st.set_page_config(page_title=f"Lazarus · {title}", page_icon=ICON, layout="wide")
+    st.logo(ICON, icon_image=ICON, size="large")
     app = get_app()
     sidebar(app)
-    st.title(title)
+    if show_title:
+        st.title(title)
     return app
 
 
@@ -90,7 +147,7 @@ def work_status(app: Lazarus) -> None:
             st.progress(0.0, text=f"{t.stage} ({label})...")
     recent = [t for t in worker.tasks.values() if t.status == "error" and t.finished and time.time() - t.finished < 600]
     for t in recent[-1:]:
-        st.error(f"{t.stage}. " + (f"Código de referencia: {t.run_id[:8]}" if t.run_id else ""))
+        st.error(f"{t.stage}: {(t.error or '')[:300]}" + (f"\n\nCódigo de referencia: {t.run_id[:8]}" if t.run_id else ""))
         if t.auth_error:
             st.session_state["claude_auth"] = {"supported": True, "logged_in": False, "email": None}
 

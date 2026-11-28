@@ -241,3 +241,63 @@ def test_brightdata_remote_inputs():
     assert "remote" not in src.build_input("linkedin", "devops", "", "AR")
     assert src.build_input("indeed", "devops", "", "AR", remote=True)["keyword_search"] == "devops remoto"
     assert src.build_input("glassdoor", "devops", "", "US", remote=True)["keyword"] == "devops remote"
+
+
+def test_long_tasks_get_longer_timeout_and_no_retry(tmp_path):
+    import subprocess
+    calls = []
+
+    def runner(cmd, input=None, **kw):
+        calls.append(kw["timeout"])
+        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+
+    log = RunLogger(DB(tmp_path / "t.db"), tmp_path / "logs")
+    c = ClaudeClient("claude", 120, 1, runner=runner, long_timeout=360)
+    with pytest.raises(ClaudeError) as ei:
+        with log.run("interview_prep") as run:
+            c.run("interview_prep", "<cv>x</cv>", run)
+    assert calls == [360] and "6 minutos" in str(ei.value) and "json-schema" not in str(ei.value)
+    calls.clear()
+    with pytest.raises(ClaudeError) as ei:
+        with log.run("analyze") as run:
+            c.run("extract_job", "<vacante>x</vacante>", run)
+    assert calls == [120, 120] and "120 segundos" in str(ei.value)
+
+
+def test_linkedin_experience_level_input():
+    from lazarus import config
+    src = BrightDataSource("k", config.load()["brightdata"])
+    assert src.build_input("linkedin", "devops", "", "MX", level="junior")["experience_level"] == "Entry level"
+    assert "experience_level" not in src.build_input("linkedin", "devops", "", "MX")
+    assert "experience_level" not in src.build_input("indeed", "devops", "", "MX", level="junior")
+
+
+def test_parse_posted_dates():
+    from datetime import date
+    from lazarus.normalize import parse_posted
+    ref = date(2026, 11, 27)
+    assert parse_posted("2026-11-20T10:00:00Z", ref) == "2026-11-20"
+    assert parse_posted("hace 3 días", ref) == "2026-11-24"
+    assert parse_posted("2 weeks ago", ref) == "2026-11-13"
+    assert parse_posted("Publicado hace 5 horas", ref) == "2026-11-27"
+    assert parse_posted("ayer", ref) == "2026-11-26"
+    assert parse_posted("30+ days ago", ref) == "2026-10-28"
+    assert parse_posted("hace 1 mes", ref) == "2026-10-28"
+    assert parse_posted("sin fecha", ref) is None and parse_posted(None, ref) is None
+
+
+def test_linkedin_time_range_input():
+    from lazarus import config
+    src = BrightDataSource("k", config.load()["brightdata"])
+    assert src.build_input("linkedin", "devops", "", "MX", freshness="day")["time_range"] == "Past 24 hours"
+    assert src.build_input("linkedin", "devops", "", "MX", freshness="3days")["time_range"] == "Past week"
+    assert "time_range" not in src.build_input("linkedin", "devops", "", "MX")
+
+
+def test_linkedin_modality_and_job_type_inputs():
+    from lazarus import config
+    src = BrightDataSource("k", config.load()["brightdata"])
+    i = src.build_input("linkedin", "devops", "", "MX", modalities=["hybrid"], part_time=True)
+    assert i["remote"] == "Hybrid" and i["job_type"] == "Part-time"
+    assert "remote" not in src.build_input("linkedin", "devops", "", "MX", modalities=["remote", "hybrid"])
+    assert src.build_input("indeed", "devops", "", "MX", modalities=["hybrid"], part_time=True)["keyword_search"] == "devops híbrido part time"

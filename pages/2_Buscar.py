@@ -2,7 +2,7 @@ import pandas as pd
 import streamlit as st
 
 from lazarus.services import ALL_SOURCES, BD_SOURCES, COUNTRY_NAMES, SOURCE_LABELS, WEB
-from lazarus.ui import page
+from lazarus.ui import FRESHNESS, LEVEL_LABELS, page
 
 app = page("Buscar empleo", "🔍")
 COUNTRIES = {"": "Cualquiera", **COUNTRY_NAMES}
@@ -30,7 +30,24 @@ keyword = st.text_input("Puesto o palabras clave", placeholder="Ejemplo: soporte
 c1, c2 = st.columns(2)
 location = c1.text_input("Ciudad o región (opcional)", placeholder="Ejemplo: Guadalajara")
 country = c2.selectbox("País", list(COUNTRIES), format_func=COUNTRIES.get)
-remote = st.toggle("Solo trabajos remotos", help="Busca ofertas 100 % remotas. Se muestran también las de empresas de otros países.")
+cv_level = ((app.active_cv() or {}).get("profile") or {}).get("seniority")
+level_opts = (["auto"] if cv_level else []) + ["intern", "junior", "mid", "senior", "lead", "any"]
+level_choice = st.selectbox(
+    "Nivel de experiencia", level_opts,
+    format_func=lambda k: f"Según mi CV ({LEVEL_LABELS[cv_level]})" if k == "auto" else "Cualquier nivel" if k == "any" else LEVEL_LABELS[k],
+    help="Lazarus pide a LinkedIn posiciones de ese nivel. En todas las fuentes oculta las que piden más "
+         "experiencia de la que usted tiene.")
+level = cv_level if level_choice == "auto" else None if level_choice == "any" else level_choice
+freshness = st.selectbox("Publicadas", list(FRESHNESS), index=list(FRESHNESS).index("month"),
+                         format_func=FRESHNESS.get,
+                         help="LinkedIn filtra por fecha al buscar. En las demás fuentes Lazarus filtra con la fecha "
+                              "que aparece en cada posición.")
+WORK_OPTS = {"remote": "Remoto", "hybrid": "Híbrido", "onsite": "Presencial", "part_time": "Part time"}
+work = st.pills("Modalidad y jornada", list(WORK_OPTS), selection_mode="multi", format_func=WORK_OPTS.get,
+                help="Elija una o varias. Sin selección, busca todo. «Part time» se combina con las demás: "
+                     "por ejemplo, Remoto + Part time = remotos de medio tiempo.") or []
+modalities = [w for w in work if w != "part_time"]
+part_time = "part_time" in work
 
 # ---------------------------------------------------------------- dónde buscar
 st.subheader("Dónde buscar")
@@ -113,7 +130,8 @@ if st.button("Buscar", type="primary"):
         st.stop()
     st.session_state["search_task"] = app.worker.submit_search(
         keyword=keyword, location=location, country=country, sources=chosen, force=force,
-        all_portals=all_portals, max_pages=max_pages, remote=remote)
+        all_portals=all_portals, max_pages=max_pages, level=level,
+        freshness=freshness, modalities=modalities, part_time=part_time)
 
 
 @st.fragment(run_every=2)

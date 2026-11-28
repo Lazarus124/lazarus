@@ -14,7 +14,7 @@ import sys
 import threading
 from pathlib import Path
 
-NAMES = ("firecrawl", "brightdata")
+NAMES = ("firecrawl", "brightdata", "youtube")
 _lock = threading.Lock()
 
 

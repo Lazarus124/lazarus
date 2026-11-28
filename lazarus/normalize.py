@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from datetime import date, datetime, timedelta
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .db import DB, now
@@ -148,3 +149,63 @@ def assign_dedup(db: DB, job_id: int, title, company, country) -> int | None:
         return None
     db.execute("UPDATE job SET duplicate_of = ? WHERE id = ?", (orig["id"], job_id))
     return orig["id"]
+
+
+FRESHNESS_DAYS = {"day": 1, "3days": 3, "week": 7, "month": 30}
+_UNITS = {"hora": 1 / 24, "hour": 1 / 24, "hr": 1 / 24, "minut": 0, "min": 0, "dia": 1, "día": 1, "day": 1,
+          "semana": 7, "week": 7, "mes": 30, "month": 30}
+
+
+def parse_posted(text: str | None, ref: date) -> str | None:
+    """Fecha de publicación (AAAA-MM-DD) desde una fecha ISO o un texto relativo
+    ("hace 3 días", "2 weeks ago", "ayer", "30+ days ago"). None si no se puede."""
+    if not text:
+        return None
+    t = str(text).strip().lower()
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", t)
+    if m:
+        try:
+            return date(int(m[1]), int(m[2]), int(m[3])).isoformat()
+        except ValueError:
+            return None
+    if t in ("hoy", "today", "just now", "recién", "recien") or "hoy" in t.split() or "today" in t:
+        return ref.isoformat()
+    if "ayer" in t or "yesterday" in t:
+        return (ref - timedelta(days=1)).isoformat()
+    m = re.search(r"(\d+)\+?\s*([a-záéíóú]+)", unicodedata.normalize("NFC", t))
+    if m:
+        n, unit = int(m[1]), m[2]
+        for key, days in _UNITS.items():
+            if unit.startswith(key):
+                return (ref - timedelta(days=int(n * days))).isoformat()
+    return None
+
+
+def posted_on(job: dict, analysis: dict) -> str | None:
+    """Fecha de publicación de una vacante: dato de la fuente o, si no, lo que leyó Claude."""
+    try:
+        ref = datetime.fromisoformat(job["fetched_at"]).date()
+    except (KeyError, TypeError, ValueError):
+        ref = date.today()
+    found = parse_posted(job.get("posted_at"), ref)
+    if found:
+        return found
+    days = analysis.get("posted_days_ago")
+    if isinstance(days, int) and 0 <= days <= 365:
+        return (ref - timedelta(days=days)).isoformat()
+    return None
+
+
+CLOSED_PATTERNS = [
+    "ya no se aceptan solicitudes", "ya no acepta solicitudes", "ya no se reciben postulaciones",
+    "esta vacante ya no esta disponible", "esta oferta ya no esta disponible", "esta oferta ya no esta activa",
+    "la oferta ha expirado", "oferta finalizada", "vacante cerrada", "oferta cerrada", "proceso cerrado",
+    "no longer accepting applications", "this job is no longer available", "job has expired",
+    "position has been filled", "this job has expired", "vaga encerrada", "esta vaga nao esta mais disponivel",
+]
+
+
+def looks_closed(text: str | None) -> bool:
+    """True si el texto dice que la posición ya no recibe postulaciones."""
+    t = norm_text(text)
+    return any(norm_text(p) in t for p in CLOSED_PATTERNS)

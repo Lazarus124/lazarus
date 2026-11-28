@@ -29,6 +29,7 @@ def load(root: Path = ROOT, data_dir: Path | None = None) -> dict:
     cfg["keys"] = {
         "firecrawl": os.getenv("FIRECRAWL_API_KEY", "").strip(),
         "brightdata": os.getenv("BRIGHTDATA_API_KEY", "").strip(),
+        "youtube": os.getenv("YOUTUBE_API_KEY", "").strip(),
     }
     if os.getenv("LAZARUS_DEBUG") == "1":
         cfg["logging"]["debug"] = True

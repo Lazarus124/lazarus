@@ -14,6 +14,7 @@ def test_secret_store_roundtrip(tmp_path):
 
 def test_keys_from_ui_override_env_and_never_logged(make_app, cfg):
     app = make_app()
+    app._injected["firecrawl"] = False  # usar el adaptador real para ver que toma la key nueva
     assert app.key_source("firecrawl") == ".env"  # el fixture simula keys de .env
     app.save_key("firecrawl", "fc-desde-ui-SECRETA")
     assert app.cfg["keys"]["firecrawl"] == "fc-desde-ui-SECRETA"

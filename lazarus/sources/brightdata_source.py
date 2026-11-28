@@ -16,6 +16,18 @@ from ..runlog import Run
 
 API = "https://api.brightdata.com/datasets/v3"
 
+# Nivel de experiencia de Lazarus -> filtro "experience_level" de LinkedIn.
+LINKEDIN_LEVEL = {"intern": "Internship", "junior": "Entry level", "mid": "Associate",
+                  "senior": "Mid-Senior level", "lead": "Director"}
+
+# Modalidad de Lazarus -> filtro "remote" de LinkedIn (acepta un solo valor).
+LINKEDIN_MODALITY = {"remote": "Remote", "hybrid": "Hybrid", "onsite": "On-site"}
+# Palabra que se agrega a la búsqueda en fuentes sin filtro de modalidad (Indeed, Glassdoor, portales).
+MODALITY_WORD = {"remote": ("remoto", "remote"), "hybrid": ("híbrido", "hybrid")}
+
+# Frescura de Lazarus -> filtro "time_range" de LinkedIn (no tiene "3 días": se usa la semana y Lazarus filtra).
+LINKEDIN_TIME = {"day": "Past 24 hours", "3days": "Past week", "week": "Past week", "month": "Past month"}
+
 # Bright Data exige "location" en LinkedIn, Indeed y Glassdoor. Sin ciudad se usa el país (en inglés, sin acentos).
 COUNTRY_EN = {"MX": "Mexico", "AR": "Argentina", "CO": "Colombia", "CL": "Chile", "PE": "Peru", "BR": "Brazil",
               "UY": "Uruguay", "EC": "Ecuador", "CR": "Costa Rica", "GT": "Guatemala", "PA": "Panama",
@@ -118,13 +130,23 @@ class BrightDataSource:
         if resp.status_code >= 400:
             raise SourceError(f"Bright Data: HTTP {resp.status_code} en {what}: {resp.text[:800]}")
 
-    def build_input(self, source: str, keyword: str, location: str, country: str, remote: bool = False) -> dict:
+    def build_input(self, source: str, keyword: str, location: str, country: str, remote: bool = False,
+                    level: str | None = None, freshness: str | None = None,
+                    modalities: list[str] | None = None, part_time: bool = False) -> dict:
         template = self.cfg.get("inputs", {}).get(source, {"keyword": "{keyword}", "location": "{location}"})
         cc = (country or "").upper()
-        if remote and not any("{remote}" in v for v in template.values()):
-            # Indeed y Glassdoor no tienen filtro de remoto: se agrega la palabra a la búsqueda.
-            keyword = f"{keyword} {'remote' if cc == 'US' else 'remoto'}"
-        values = {"remote": "Remote" if remote else "", "keyword": keyword, "location": location.strip() or COUNTRY_EN.get(cc, "Latin America"), "country": cc,
+        if remote and not modalities:
+            modalities = ["remote"]
+        single = modalities[0] if modalities and len(modalities) == 1 else None
+        if single in MODALITY_WORD and not any("{remote}" in v for v in template.values()):
+            # Indeed y Glassdoor no tienen filtro de modalidad: se agrega la palabra a la búsqueda.
+            keyword = f"{keyword} {MODALITY_WORD[single][1 if cc == 'US' else 0]}"
+        if part_time and not any("{job_type}" in v for v in template.values()):
+            keyword = f"{keyword} part time"
+        values = {"remote": LINKEDIN_MODALITY.get(single or "", ""), "job_type": "Part-time" if part_time else "",
+                  "experience_level": LINKEDIN_LEVEL.get(level or "", ""),
+                  "time_range": LINKEDIN_TIME.get(freshness or "", ""),
+                  "keyword": keyword, "location": location.strip() or COUNTRY_EN.get(cc, "Latin America"), "country": cc,
                   # Indeed usa un dominio por país: mx.indeed.com, ar.indeed.com; Estados Unidos usa indeed.com
                   "indeed_domain": "indeed.com" if cc in ("", "US") else f"{cc.lower()}.indeed.com"}
         return {k: v.format(**values) for k, v in template.items() if v.format(**values) != ""}
@@ -167,9 +189,10 @@ class BrightDataSource:
             return jobs[0] if jobs else None
 
     def search(self, source: str, keyword: str, location: str, country: str, run: Run,
-               remote: bool = False) -> tuple[list[RawJob], int, dict]:
+               remote: bool = False, level: str | None = None, freshness: str | None = None,
+               modalities: list[str] | None = None, part_time: bool = False) -> tuple[list[RawJob], int, dict]:
         """Devuelve (vacantes, registros cobrados, diagnóstico)."""
-        with run.step(f"brightdata.{source}", keyword=keyword, location=location, country=country, remote=remote) as st:
+        with run.step(f"brightdata.{source}", keyword=keyword, location=location, country=country) as st:
             params = {
                 "dataset_id": self.cfg["datasets"][source],
                 "type": "discover_new",
@@ -177,7 +200,7 @@ class BrightDataSource:
                 "include_errors": "true",
                 "limit_per_input": str(self.cfg["limit_per_source"]),
             }
-            body = [self.build_input(source, keyword, location, country, remote)]
+            body = [self.build_input(source, keyword, location, country, remote, level, freshness, modalities, part_time)]
             st.set(input=body[0])
             resp = self.client.post(f"{API}/trigger", params=params, json=body, headers=self._headers())
             self._check(resp, "trigger")

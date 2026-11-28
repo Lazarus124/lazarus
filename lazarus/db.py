@@ -31,7 +31,25 @@ class DB:
         cols = {r[1] for r in self._con.execute("PRAGMA table_info(search)")}
         if "remote" not in cols:
             self._con.execute("ALTER TABLE search ADD COLUMN remote INTEGER NOT NULL DEFAULT 0")
-            self._con.commit()
+        if "level" not in cols:
+            self._con.execute("ALTER TABLE search ADD COLUMN level TEXT")
+        if "freshness" not in cols:
+            self._con.execute("ALTER TABLE search ADD COLUMN freshness TEXT")
+        if "modalities" not in cols:
+            self._con.execute("ALTER TABLE search ADD COLUMN modalities TEXT")
+            self._con.execute("ALTER TABLE search ADD COLUMN part_time INTEGER NOT NULL DEFAULT 0")
+            self._con.execute("UPDATE search SET modalities = '[\"remote\"]' WHERE remote = 1")
+        if "employment_type" not in {r[1] for r in self._con.execute("PRAGMA table_info(job_analysis)")}:
+            self._con.execute("ALTER TABLE job_analysis ADD COLUMN employment_type TEXT")
+        job_cols = {r[1] for r in self._con.execute("PRAGMA table_info(job)")}
+        if "closed" not in job_cols:
+            self._con.execute("ALTER TABLE job ADD COLUMN closed INTEGER NOT NULL DEFAULT 0")
+            self._con.execute("ALTER TABLE job ADD COLUMN closed_checked_at TEXT")
+        if "file_blob" not in {r[1] for r in self._con.execute("PRAGMA table_info(cv)")}:
+            self._con.execute("ALTER TABLE cv ADD COLUMN file_blob BLOB")
+        if "posted_on" not in {r[1] for r in self._con.execute("PRAGMA table_info(job_analysis)")}:
+            self._con.execute("ALTER TABLE job_analysis ADD COLUMN posted_on TEXT")
+        self._con.commit()
 
     def execute(self, sql: str, params: tuple | list = ()) -> sqlite3.Cursor:
         with self._lock:

@@ -1,9 +1,11 @@
+import json
 import pandas as pd
 import streamlit as st
 
 from lazarus.services import SOURCE_LABELS
 from lazarus.documents import cv_to_docx
-from lazarus.ui import MODALITY, SENIORITY, page, render_research, show_error, task_box, watch_tasks
+from lazarus.ui import (EMPLOYMENT, FRESHNESS, LEVEL_LABELS, MODALITY, SENIORITY, TRACK_LABELS, age_label, open_folder, page,
+                        tracking_buttons, render_research, show_error, task_box, watch_tasks)
 
 app = page("Vacantes recomendadas", "⭐")
 
@@ -21,7 +23,13 @@ if not searches:
     st.info("Todavía no buscó empleo. Vaya a **Buscar empleo**.")
     st.stop()
 
-labels = {s["id"]: f"{s['keyword']}{' · remoto' if s['remote'] else ''} · {s['location'] or ''} {s['country'] or ''} · {s['jobs']} ofertas · {s['created_at'][:16]}"
+def _work_label(s: dict) -> str:
+    names = {"remote": "remoto", "hybrid": "híbrido", "onsite": "presencial"}
+    parts = [names[m] for m in json.loads(s.get("modalities") or "[]")] + (["part time"] if s.get("part_time") else [])
+    return (" · " + ", ".join(parts)) if parts else ""
+
+
+labels = {s["id"]: f"{s['keyword']}{_work_label(s)}{' · ' + SENIORITY.get(s['level'], '') if s.get('level') else ''} · {s['location'] or ''} {s['country'] or ''} · {s['jobs']} ofertas · {s['created_at'][:16]}"
           for s in searches}
 labels = {None: "Todas las búsquedas", **labels}
 default = st.session_state.get("search_id", searches[0]["id"])
@@ -62,14 +70,42 @@ if sid:
     st.download_button("Descargar informe de esta búsqueda", app.export_search(sid),
                        file_name=f"lazarus_busqueda_{sid}.zip", mime="application/zip",
                        help="Archivo para enviar a soporte: qué se buscó, en qué fuentes, qué llegó y los errores.")
-others = True
-if search and search["country"]:
-    others = st.toggle(f"Mostrar también ofertas de otros países (la búsqueda es para {search['country']})",
-                       value=bool(search["remote"]), help="En búsquedas remotas se muestran por defecto.")
-remote_only = None
-if search and search["remote"]:
-    remote_only = st.toggle("Solo ofertas remotas", value=True)
-rows = app.ranking(sid, other_countries=others, remote_only=remote_only)
+import json
+
+from lazarus.normalize import FRESHNESS_DAYS
+
+s_mod = json.loads((search or {}).get("modalities") or "[]")
+WORK = {"remote": "Remoto", "hybrid": "Híbrido", "onsite": "Presencial"}
+with st.expander("Filtros", icon=":material/tune:"):
+    c1, c2 = st.columns(2)
+    mods = c1.multiselect("Modalidad", list(WORK), default=s_mod, format_func=WORK.get, key=f"mods_{sid}",
+                          placeholder="Todas")
+    pt = c2.toggle("Solo part time", value=bool((search or {}).get("part_time")), key=f"pt_{sid}")
+    unknown_mod = c2.toggle("Incluir posiciones sin dato de modalidad o jornada", value=True, key=f"um_{sid}",
+                            disabled=not (mods or pt))
+    c1, c2 = st.columns(2)
+    fresh_default = (search or {}).get("freshness")
+    fresh = c1.selectbox("Publicadas", list(FRESHNESS), index=list(FRESHNESS).index(fresh_default),
+                         format_func=FRESHNESS.get, key=f"fresh_{sid}")
+    undated = c2.toggle("Incluir posiciones sin fecha de publicación", value=True, disabled=fresh is None,
+                        help="Algunos portales no muestran la fecha.")
+    others, my_level = True, None
+    c1, c2 = st.columns(2)
+    if search and search["country"]:
+        others = c1.toggle(f"Mostrar también ofertas de otros países (la búsqueda es para {search['country']})",
+                           value=s_mod == ["remote"], help="En búsquedas solo remotas se muestran por defecto.")
+    if search and search.get("level"):
+        my_level = c2.toggle(f"Solo posiciones para mi nivel ({LEVEL_LABELS.get(search['level'], search['level'])})",
+                             value=True, help="Oculta las posiciones de un nivel superior o que piden más años de "
+                                              "experiencia que su CV.")
+    c1, c2 = st.columns(2)
+    show_closed = c1.toggle("Incluir posiciones cerradas", value=False,
+                            help="Las que ya no reciben postulaciones (según la página o una verificación).")
+    show_hidden = c2.toggle("Mostrar las que marqué como «No me gusta» u ocultas", value=False)
+rows = app.ranking(sid, other_countries=others, my_level_only=my_level,
+                   max_age_days=FRESHNESS_DAYS.get(fresh), include_undated=undated,
+                   include_closed=show_closed, include_hidden=show_hidden,
+                   modalities=mods or [], part_time_only=pt, include_unknown_modality=unknown_mod)
 if not rows:
     st.info("Esta búsqueda todavía no tiene ofertas revisadas.")
     st.stop()
@@ -79,7 +115,9 @@ rows = [r for r in rows if r["score"] >= min_score]
 
 table = pd.DataFrame([{
     "Afinidad": r["score"], "Puesto": r["title"], "Empresa": r["company"], "Ubicación": r["location"] or r["country"],
-    "Modalidad": MODALITY.get(r["modality"], "Sin dato"), "Nivel": SENIORITY.get(r["seniority"], "Sin dato"),
+    "Modalidad": MODALITY.get(r["modality"], "Sin dato"), "Jornada": EMPLOYMENT.get(r.get("employment_type"), "Sin dato"), "Nivel": SENIORITY.get(r["seniority"], "Sin dato"),
+    "Publicada": age_label(r.get("posted_on")),
+    "Estado": ("🔒 Cerrada · " if r.get("closed") else "") + TRACK_LABELS.get(r.get("tracking"), ""),
     "Publicada en": where(r["source"]), "Enlace": r["url"],
 } for r in rows])
 st.dataframe(table, hide_index=True, use_container_width=True,
@@ -87,7 +125,7 @@ st.dataframe(table, hide_index=True, use_container_width=True,
                             "Enlace": st.column_config.LinkColumn("Oferta", display_text="Ver oferta")})
 
 st.subheader("Por qué le recomendamos cada posición")
-watch_tasks(app, [k for r in rows[:30] for k in (f"company:{r['job_id']}", f"cv:{r['job_id']}")])
+watch_tasks(app, [k for r in rows[:30] for k in (f"company:{r['job_id']}", f"cv:{r['job_id']}", f"verify:{r['job_id']}")])
 
 for r in rows[:30]:
     b = r["breakdown"]
@@ -112,6 +150,26 @@ for r in rows[:30]:
                 st.rerun()
             except Exception as exc:  # noqa: BLE001
                 show_error(exc, "No se pudo generar la explicación")
+
+        tracking_buttons(app, jid, r.get("tracking"), key=str(jid))
+        saved = st.session_state.get(f"saved_{jid}")
+        if saved:
+            st.success("Guardé una copia para esta postulación:\n" + "\n".join(f"- {f}" for f in saved))
+            if st.button("Abrir la carpeta de aplicaciones", key=f"open_{jid}"):
+                open_folder(app.applications_dir())
+        v1, v2 = st.columns([1, 3])
+        if v1.button("Verificar si sigue abierta", key=f"ver_{jid}"):
+            app.worker.submit_call("Verificando posición", f"verify:{jid}", app.verify_open, jid)
+            st.rerun()
+        vt = app.worker.latest_for_key(f"verify:{jid}")
+        if vt and vt.active:
+            v2.info("Verificando...")
+        elif vt and vt.status == "done":
+            (v2.warning if vt.result["closed"] else v2.success)(vt.result["reason"])
+        elif vt and vt.status == "error":
+            v2.error(vt.error)
+        elif r.get("closed"):
+            v2.warning("Esta posición parece cerrada.")
 
         c1, c2, c3, c4 = st.columns(4)
         c1.link_button("Ver la posición y postularme", r["url"], use_container_width=True)

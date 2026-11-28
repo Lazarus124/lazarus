@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # pages/0_Inicio.py se prueba a través de app.py (usa enlaces del menú de navegación).
 PAGES = ["app.py", "pages/1_CV.py", "pages/2_Buscar.py", "pages/3_Vacantes.py", "pages/4_Carta.py",
          "pages/5_Mercado.py", "pages/6_Configuracion.py", "pages/7_Corridas.py",
-         "pages/8_Entrevista.py"]
+         "pages/8_Entrevista.py", "pages/9_Seguimiento.py", "pages/10_Tutor.py"]
 
 
 @pytest.mark.parametrize("path", PAGES)
@@ -77,7 +77,7 @@ def test_interview_page_with_stages(make_app, cfg, monkeypatch):
     sid = app.search("devops", "Guadalajara", "MX", ["linkedin"])["search_id"]
     app.analyze(sid)
     jid = app.ranking(sid)[0]["job_id"]
-    app.interview_prep(jid)
+    app.set_stages(jid, ["Reclutador/a", "Hiring manager", "Mi etapa"])
     app.save_stage(jid, "Reclutador/a", "hecha", "Todo bien")
     app.prepare_stage(jid, "Hiring manager")
     app.tailor_cv(jid)
@@ -90,4 +90,28 @@ def test_interview_page_with_stages(make_app, cfg, monkeypatch):
         at.session_state["interview_job"] = jid
         at.run()
         assert not at.exception, at.exception
+    _clear_cache()
+
+
+def test_tutor_page_with_plan(make_app, cfg, monkeypatch):
+    from tests.test_tutor import _tutor_app
+    app = _tutor_app(make_app)
+    pid = app.create_learning_plan({"skills": [{"skill": "terraform", "level": "Desde cero"}], "hours": 5,
+                                    "target_date": "2027-01-15", "styles": ["Videos"],
+                                    "origin": {"kind": "mercado", "label": ""}})
+    app.set_task_done(pid, "s1t1", True)
+    app.tutor_chat(pid, "¿Qué sigue?")
+    app.db.close()
+    monkeypatch.setenv("LAZARUS_DATA_DIR", str(cfg["paths"]["data"]))
+    monkeypatch.setenv("PATH", "")
+    _clear_cache()
+    at = AppTest.from_file(str(ROOT / "pages/10_Tutor.py"), default_timeout=30)
+    at.run()
+    assert not at.exception, at.exception
+    text = " ".join(m.value for m in at.markdown)
+    assert "Infra de un blog" in text and "watch?v=abc123" in text
+    assert [c.value for c in at.checkbox] == [True, False, False]  # 1 de 3 tareas hechas
+    # nuevo plan: el formulario de preguntas aparece con las habilidades del mercado
+    at.selectbox[0].set_value(None).run()
+    assert not at.exception, at.exception
     _clear_cache()

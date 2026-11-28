@@ -85,37 +85,42 @@ def cv_to_docx(cv: dict) -> bytes:
     return _save(doc)
 
 
-def prep_to_docx(prep: dict, title: str, stages: list[dict] | None = None) -> bytes:
-    """Guía del proceso de entrevistas: una sección por etapa, con la preparación a fondo si existe."""
+def prep_to_docx(prep: dict | None, title: str, stages: list[dict]) -> bytes:
+    """Guía del proceso de entrevistas: una sección por etapa elegida, con su preparación si existe."""
+    prep = prep or {}
     doc = _base()
     r = doc.add_paragraph().add_run(f"Proceso de entrevistas: {title}")
     r.bold = True
     r.font.size = Pt(16)
     r.font.color.rgb = ACCENT
-    doc.add_paragraph(prep.get("overview", ""))
-    deep = {s["name"]: s for s in (stages or [])}
-    for i, st in enumerate(prep.get("stages", []), 1):
-        _heading(doc, f"Etapa {i}: {st['name']}")
-        doc.add_paragraph(f"Quién: {st['interviewer']} · Formato: {st['format']}")
-        doc.add_paragraph(f"Objetivo: {st['goal']}")
-        if st.get("evaluates"):
-            doc.add_paragraph("Evalúan: " + ", ".join(st["evaluates"]))
-        extra = deep.get(st["name"], {})
-        if extra.get("notes"):
-            doc.add_paragraph(f"Mis notas: {extra['notes']}")
-        questions = (extra.get("deep") or {}).get("questions") or st.get("questions", [])
+    if prep.get("overview"):
+        doc.add_paragraph(prep["overview"])
+    for i, stage in enumerate(stages, 1):
+        st, deep = stage.get("plan") or {}, stage.get("deep") or {}
+        _heading(doc, f"Etapa {i}: {stage['name']}")
+        if st:
+            doc.add_paragraph(f"Quién: {st['interviewer']} · Formato: {st['format']}")
+            doc.add_paragraph(f"Objetivo: {st['goal']}")
+            if st.get("evaluates"):
+                doc.add_paragraph("Evalúan: " + ", ".join(st["evaluates"]))
+        if stage.get("notes"):
+            doc.add_paragraph(f"Mis notas: {stage['notes']}")
+        if deep.get("focus"):
+            doc.add_paragraph(f"En qué enfocarse: {deep['focus']}")
+        questions = deep.get("questions") or st.get("questions", [])
+        if not questions:
+            doc.add_paragraph("Todavía sin preparar.").runs[0].italic = True
         for q in questions:
             doc.add_paragraph().add_run(q["question"]).bold = True
             doc.add_paragraph(f"Por qué la preguntan: {q['why']}")
             doc.add_paragraph(f"Cómo responder: {q['answer_hint']}")
             if q.get("follow_up"):
                 doc.add_paragraph(f"Repregunta probable: {q['follow_up']}")
-        if st.get("tips"):
-            doc.add_paragraph().add_run("Consejos").italic = True
-            _bullets(doc, st["tips"])
-        if st.get("questions_to_ask"):
-            doc.add_paragraph().add_run("Preguntas para hacerle").italic = True
-            _bullets(doc, st["questions_to_ask"])
+        for label, key in (("Consejos", "tips"), ("Preguntas para hacerle", "questions_to_ask")):
+            items = deep.get(key) or st.get(key)
+            if items:
+                doc.add_paragraph().add_run(label).italic = True
+                _bullets(doc, items)
     for name, items in (("Temas para repasar", prep.get("topics_to_review", [])),
                         ("Puntos para aclarar en el proceso", prep.get("points_to_clarify", []))):
         if items:

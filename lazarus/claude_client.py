@@ -75,9 +75,15 @@ def resolve_binary(binary: str = "claude") -> str | None:
 
 
 class ClaudeClient:
-    def __init__(self, binary: str = "claude", timeout: int = 120, retries: int = 1, runner=subprocess.run):
+    # Tareas que generan textos largos: necesitan más tiempo y no se reintentan si se agota.
+    LONG_TASKS = {"interview_prep", "interview_stage", "tailor_cv", "company_research", "cover_letter",
+                  "learning_plan", "learning_resources"}
+
+    def __init__(self, binary: str = "claude", timeout: int = 120, retries: int = 1, runner=subprocess.run,
+                 long_timeout: int = 360):
         self.binary = binary
         self.timeout = timeout
+        self.long_timeout = long_timeout
         self.retries = retries
         self.runner = runner
 
@@ -95,23 +101,32 @@ class ClaudeClient:
         schema = load_schema(task)
         stdin = f"{prompt}\n\n{data}"
         cmd = self.command(schema)
+        long = task in self.LONG_TASKS
+        timeout = max(self.timeout, self.long_timeout) if long else self.timeout
         last: Exception | None = None
         attempts = self.retries + 1
         for attempt in range(1, attempts + 1):
             try:
-                with run.step(f"claude.{task}", attempt=attempt, input_chars=len(stdin)) as st:
-                    return self._call(cmd, stdin, st, run, task, attempt, schema)
+                with run.step(f"claude.{task}", attempt=attempt, input_chars=len(stdin), timeout_s=timeout) as st:
+                    return self._call(cmd, stdin, st, run, task, attempt, schema, timeout)
             except ClaudeAuthError:
                 raise
-            except (subprocess.TimeoutExpired, ClaudeError, json.JSONDecodeError, OSError) as exc:
+            except subprocess.TimeoutExpired as exc:
                 last = exc
+                if long:  # reintentar duplicaría la espera sin cambiar el resultado
+                    raise ClaudeError(f"Claude tardó más de {timeout // 60} minutos en responder. "
+                                      "Intente de nuevo en unos minutos.") from exc
+            except (ClaudeError, json.JSONDecodeError, OSError) as exc:
+                last = exc
+        if isinstance(last, subprocess.TimeoutExpired):
+            raise ClaudeError(f"Claude tardó más de {timeout} segundos en responder ({attempts} intentos).") from last
         raise ClaudeError(f"{task} falló después de {attempts} intentos: {type(last).__name__}: {last}") from last
 
-    def _call(self, cmd, stdin, st, run, task, attempt, schema) -> dict:
+    def _call(self, cmd, stdin, st, run, task, attempt, schema, timeout=None) -> dict:
         run.debug_dump(f"{task}-{attempt}-stdin.txt", stdin)
         proc = self.runner(
             cmd, input=stdin, capture_output=True, text=True, encoding="utf-8",
-            timeout=self.timeout, cwd=str(workdir()), **NO_WINDOW,
+            timeout=timeout or self.timeout, cwd=str(workdir()), **NO_WINDOW,
         )
         run.debug_dump(f"{task}-{attempt}-stdout.txt", proc.stdout)
         run.debug_dump(f"{task}-{attempt}-stderr.txt", proc.stderr)

@@ -3,3 +3,47 @@ gatherUsageStats = false
 
 [server]
 address = "127.0.0.1"
+enableStaticServing = true   # sirve ./static (tipografía de la marca)
+
+[client]
+toolbarMode = "viewer"   # menú ⋮ con Settings (tema claro/oscuro), sin opciones de desarrollo
+
+# Imagen de Lazarus: negro, blanco y naranja. El usuario elige claro u oscuro en el menú ⋮ → Settings.
+[theme]
+primaryColor = "#C2582B"
+baseRadius = "0.5rem"
+font = "Manrope, sans-serif"
+headingFont = "Manrope, sans-serif"
+
+# Manrope (SIL Open Font License), incluida en static/fonts.
+[[theme.fontFaces]]
+family = "Manrope"
+url = "app/static/fonts/Manrope-Variable.ttf"
+style = "normal"
+weight = "200 800"
+
+[theme.light]
+primaryColor = "#C2582B"
+font = "Manrope, sans-serif"
+headingFont = "Manrope, sans-serif"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#FBF3EE"
+textColor = "#171717"
+borderColor = "#EADFD8"
+
+[theme.light.sidebar]
+backgroundColor = "#FBF3EE"
+secondaryBackgroundColor = "#F6E7DD"
+
+[theme.dark]
+primaryColor = "#C2582B"
+font = "Manrope, sans-serif"
+headingFont = "Manrope, sans-serif"
+backgroundColor = "#141414"
+secondaryBackgroundColor = "#1E1E1E"
+textColor = "#F2F2F2"
+borderColor = "#2E2E2E"
+
+[theme.dark.sidebar]
+backgroundColor = "#1B1B1B"
+secondaryBackgroundColor = "#262626"

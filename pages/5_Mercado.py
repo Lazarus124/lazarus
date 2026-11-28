@@ -28,21 +28,29 @@ if n < app.cfg["metrics"]["min_salary_n"]:
     st.warning("Son pocas ofertas: tome estos datos con cautela.")
 
 st.subheader("Habilidades más pedidas")
-kind = st.radio("Tipo", ["required", "nice"], horizontal=True, format_func=lambda k: "Obligatorias" if k == "required" else "Deseables")
-top = metrics.top_skills(df, kind)
+c1, c2 = st.columns([2, 3])
+kind = c1.radio("Tipo", ["required", "nice"], horizontal=True, format_func=lambda k: "Obligatorias" if k == "required" else "Deseables")
+cv = app.active_cv()
+hide_mine = c2.toggle("Ocultar habilidades que ya tengo", disabled=not cv,
+                      help="Quita de la lista las habilidades que muestra su CV." if cv else "Cargue su CV en Mi CV.")
+top = metrics.top_skills(df, kind, n=200 if hide_mine else 20)
+if hide_mine:
+    top = top[~top["skill"].isin(set(cv["profile"].get("skills", [])))].head(20)
+    if top.empty:
+        st.success("Su CV ya muestra todas estas habilidades.")
 if not top.empty:
     st.altair_chart(alt.Chart(top).mark_bar().encode(
         x=alt.X("porcentaje:Q", title="% de ofertas que la piden"), y=alt.Y("skill:N", sort="-x", title=None),
         tooltip=["skill", "vacantes", "porcentaje"]), use_container_width=True)
 
 st.subheader("Lo que piden y su CV no muestra")
-cv = app.active_cv()
 if cv:
     g = metrics.gap(df, cv["profile"].get("skills", []), app.cfg["metrics"]["gap_threshold"])
     if g.empty:
         st.success("Su CV muestra todo lo que piden al menos 1 de cada 5 ofertas.")
     else:
         st.dataframe(g.rename(columns={"skill": "Habilidad", "vacantes": "Ofertas", "porcentaje": "% de ofertas"}), hide_index=True, use_container_width=True)
+        st.caption("¿Quiere aprenderlas? Abra **Tutor Lazarus** en el menú y arme un plan de estudio.")
 else:
     st.info("Cargue su CV en **Mi CV** para ver esta comparación.")
 

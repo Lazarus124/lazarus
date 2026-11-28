@@ -1,6 +1,7 @@
 [claude]
 binary = "claude"
 timeout_s = 120
+long_timeout_s = 360   # plan de entrevistas, CV a medida, investigación de empresa, cartas
 retries = 1
 concurrency = 3
 explain_top_n = 10
@@ -23,6 +24,9 @@ keyword = "{keyword}"
 location = "{location}"
 country = "{country}"
 remote = "{remote}"   # "Remote" en búsquedas de solo remoto
+experience_level = "{experience_level}"   # filtro de nivel de LinkedIn
+time_range = "{time_range}"   # filtro de fecha de publicación de LinkedIn
+job_type = "{job_type}"       # "Part-time" en búsquedas de medio tiempo
 
 [brightdata.inputs.indeed]
 country = "{country}"

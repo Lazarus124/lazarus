@@ -1,7 +1,7 @@
 {
   "type": "object",
   "required": ["is_job_posting", "title", "company", "country", "city", "modality", "seniority",
-               "skills_required", "skills_nice", "years_min", "language", "salary"],
+               "skills_required", "skills_nice", "years_min", "language", "salary", "posted_days_ago", "is_closed", "employment_type"],
   "properties": {
     "is_job_posting": {"type": "boolean"},
     "title": {"type": ["string", "null"]},
@@ -13,6 +13,9 @@
     "skills_required": {"type": "array", "items": {"type": "string"}},
     "skills_nice": {"type": "array", "items": {"type": "string"}},
     "years_min": {"type": ["integer", "null"]},
+    "posted_days_ago": {"type": ["integer", "null"], "minimum": 0},
+    "is_closed": {"type": "boolean"},
+    "employment_type": {"type": "string", "enum": ["full_time", "part_time", "contract", "internship", "unknown"]},
     "language": {"type": ["string", "null"], "enum": ["es", "pt", "en", null]},
     "salary": {
       "type": ["object", "null"],

@@ -18,6 +18,9 @@ else:
 CONNECTIONS = (
     ("brightdata", "Bright Data", "Busca en LinkedIn, Indeed y Glassdoor.", "https://brightdata.com/cp/setting/users"),
     ("firecrawl", "Firecrawl", "Busca en portales de empleo de la región.", "https://www.firecrawl.dev/app/api-keys"),
+    ("youtube", "YouTube (opcional)", "El tutor Lazarus recomienda videos con vistas, duración y fecha. "
+     "Sin esta clave, Lazarus busca videos en la web con Firecrawl.",
+     "https://console.cloud.google.com/apis/library/youtube.googleapis.com (active la API y cree una clave en Credenciales)"),
 )
 for name, label, what, url in CONNECTIONS:
     src = app.key_source(name)
@@ -58,6 +61,21 @@ else:
 st.subheader("Uso del plan este mes")
 for service, s in usage.status(app.db, app.cfg).items():
     st.progress(min(s["ratio"], 1.0), text=f"{SERVICE_LABELS[service]}: {s['ratio']:.0%} usado")
+
+# ------------------------------------------------------------ aplicaciones
+st.subheader("Carpeta de aplicaciones")
+st.markdown("Al marcar **Me postulé**, Lazarus guarda aquí una copia del CV (y de la carta, si la escribió) "
+            "con el nombre de la empresa y la posición.")
+with st.form("apps_dir"):
+    new_dir = st.text_input("Carpeta", str(app.applications_dir()))
+    if st.form_submit_button("Guardar"):
+        app.set_setting("applications_dir", new_dir.strip())
+        st.success("Carpeta guardada.")
+
+# ------------------------------------------------------------------ apariencia
+st.subheader("Apariencia")
+st.markdown("Lazarus usa el modo claro u oscuro de Windows. Para elegirlo a mano, abra el menú **⋮** "
+            "(arriba a la derecha) y elija **Light** (claro), **Dark** (oscuro) o **System** (el de Windows).")
 
 # -------------------------------------------------------------------- avanzado
 with st.expander("Avanzado"):

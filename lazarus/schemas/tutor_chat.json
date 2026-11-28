@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["reply", "search_queries"],
+  "properties": {
+    "reply": {"type": "string"},
+    "search_queries": {"type": "array", "maxItems": 2, "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

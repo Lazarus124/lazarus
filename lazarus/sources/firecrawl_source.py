@@ -90,6 +90,19 @@ class FirecrawlSource:
         return jobs, credits + scraped
 
     # ------------------------------------------------------------- otros usos
+    def find(self, query: str, run: Run, limit: int = 5) -> tuple[list[dict], int]:
+        """Una búsqueda web sin leer las páginas (cursos y documentación del tutor). Devuelve (resultados, créditos)."""
+        with run.step("firecrawl.find", query=query) as st:
+            try:
+                res = self.client.search(query, limit=limit)
+            except Exception as exc:  # noqa: BLE001
+                raise SourceError(f"Firecrawl search: {exc}") from exc
+            web = list(getattr(res, "web", None) or [])
+            out = [{"title": getattr(r, "title", "") or "", "url": canonical_url(r.url),
+                    "text": (getattr(r, "description", "") or "")[:400]} for r in web if getattr(r, "url", None)]
+            st.set(results=len(out))
+            return out, firecrawl_search_credits(len(web))
+
     def research(self, queries: list[str], run: Run, max_pages: int = 3, per_query: int = 5) -> tuple[list[dict], int]:
         """Búsqueda web abierta (sin lista de dominios) para investigar una empresa.
         Devuelve (fuentes, créditos). Cada fuente: title, url, text."""
@@ -141,3 +154,22 @@ class FirecrawlSource:
                 self.cache_put(url, md)
             st.set(chars=len(md))
             return md, 1
+
+    def fetch_fresh(self, url: str, run: Run) -> tuple[str | None, int | None]:
+        """Lee la página sin usar la caché (para verificar si la posición sigue abierta).
+        Devuelve (markdown, código HTTP). markdown es None si la página no se pudo leer."""
+        with run.step("firecrawl.verify") as st:
+            try:
+                doc = self.client.scrape(url, formats=["markdown"], only_main_content=True, max_age=0)
+            except Exception as exc:  # noqa: BLE001 - una página que ya no existe suele dar error
+                st.set(error=str(exc)[:200])
+                return None, None
+            meta = getattr(doc, "metadata", None)
+            status = getattr(meta, "status_code", None) or getattr(meta, "statusCode", None)
+            if status is None and isinstance(meta, dict):
+                status = meta.get("statusCode") or meta.get("status_code")
+            md = getattr(doc, "markdown", "") or ""
+            if md and (status is None or status < 400):
+                self.cache_put(url, md)
+            st.set(http_status=status, chars=len(md))
+            return md, status

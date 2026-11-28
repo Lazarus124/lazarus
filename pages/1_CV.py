@@ -1,6 +1,6 @@
 import streamlit as st
 
-from lazarus.ui import SENIORITY, page, run_note, show_error
+from lazarus.ui import LEVEL_LABELS, SENIORITY, page, run_note, show_error
 
 app = page("Mi CV", "📄")
 
@@ -20,7 +20,8 @@ if cv:
     p = cv["profile"]
     if p:
         c1, c2, c3 = st.columns(3)
-        c1.metric("Nivel", SENIORITY.get(p.get("seniority"), "Sin dato"))
+        c1.metric("Nivel", SENIORITY.get(p.get("seniority"), "Sin dato"),
+                  help=LEVEL_LABELS.get(p.get("seniority"), "Sin dato"))
         c2.metric("Años de experiencia", p.get("years_experience") or "—")
         c3.metric("Habilidades", len(p.get("skills", [])))
         st.write(p.get("summary", ""))

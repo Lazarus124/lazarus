@@ -6,6 +6,7 @@ import io
 import json
 import re
 import zipfile
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
@@ -23,16 +24,66 @@ from .runlog import RunLogger
 from .secrets import NAMES as KEY_NAMES, SecretStore
 from .sources.brightdata_source import BrightDataSource
 from .sources.firecrawl_source import FirecrawlSource
+from .sources.youtube_source import YouTubeSource
 
 BD_SOURCES = ["linkedin", "indeed", "glassdoor"]
 WEB = "web"
 ALL_SOURCES = BD_SOURCES + [WEB]
+MODALITIES = ("remote", "hybrid", "onsite")
 COUNTRY_NAMES = {"MX": "México", "AR": "Argentina", "CO": "Colombia", "CL": "Chile", "PE": "Perú", "BR": "Brasil",
                  "UY": "Uruguay", "EC": "Ecuador", "CR": "Costa Rica", "GT": "Guatemala", "PA": "Panamá",
                  "DO": "República Dominicana", "BO": "Bolivia", "PY": "Paraguay", "VE": "Venezuela",
                  "US": "Estados Unidos"}
 SOURCE_LABELS = {"linkedin": "LinkedIn", "indeed": "Indeed", "glassdoor": "Glassdoor", WEB: "Portales de empleo de la región"}
 MAX_DESC = 20_000
+
+# Etapas típicas de un proceso de selección. El usuario elige cuáles tiene su proceso y cuáles preparar.
+STAGE_CATALOG = [
+    {"name": "Reclutador/a", "interviewer": "Reclutador/a o RR. HH.", "format": "Llamada de 20 a 30 min",
+     "goal": "Filtrar candidatos y confirmar que el perfil encaja",
+     "evaluates": ["motivación", "experiencia general", "expectativa salarial", "disponibilidad", "idiomas"]},
+    {"name": "Prueba técnica en casa", "interviewer": "Equipo técnico (corrige después)", "format": "Ejercicio o test online",
+     "goal": "Ver cómo resuelve un problema real del puesto",
+     "evaluates": ["conocimientos técnicos", "calidad del trabajo", "documentación"]},
+    {"name": "Hiring manager", "interviewer": "Su futuro jefe o jefa", "format": "Entrevista de 45 a 60 min",
+     "goal": "Validar experiencia y encaje con el equipo",
+     "evaluates": ["experiencia concreta", "logros", "trabajo en equipo", "motivación por el puesto"]},
+    {"name": "Entrevista técnica", "interviewer": "Ingenieros del equipo", "format": "Preguntas técnicas, en vivo",
+     "goal": "Comprobar el nivel técnico",
+     "evaluates": ["conocimientos", "resolución de problemas", "razonamiento en voz alta"]},
+    {"name": "Caso práctico o diseño de sistemas", "interviewer": "Ingenieros sénior o arquitectos",
+     "format": "Resolver un caso en pizarra o en vivo", "goal": "Ver cómo diseña y toma decisiones",
+     "evaluates": ["diseño", "compromisos (trade-offs)", "comunicación técnica"]},
+    {"name": "Cultura y valores", "interviewer": "Personas de otros equipos o RR. HH.",
+     "format": "Preguntas de comportamiento (método STAR)", "goal": "Ver si comparte la forma de trabajar de la empresa",
+     "evaluates": ["valores", "manejo de conflictos", "aprendizaje de errores"]},
+    {"name": "Loop o panel", "interviewer": "Varias personas, una tras otra", "format": "3 a 5 entrevistas el mismo día",
+     "goal": "Evaluación completa desde varios ángulos", "evaluates": ["todo lo anterior", "consistencia", "energía"]},
+    {"name": "Dirección (CTO o VP)", "interviewer": "CTO, VP o director/a del área", "format": "Conversación de 30 a 45 min",
+     "goal": "Aprobación final y visión de largo plazo",
+     "evaluates": ["visión", "impacto en el negocio", "madurez profesional"]},
+    {"name": "Oferta y negociación", "interviewer": "Reclutador/a o RR. HH.", "format": "Llamada o correo",
+     "goal": "Acordar sueldo, beneficios y fecha de inicio", "evaluates": ["expectativas", "argumentos", "prioridades"]},
+]
+CATALOG_BY_NAME = {c["name"]: c for c in STAGE_CATALOG}
+DEFAULT_STAGES = ["Reclutador/a", "Hiring manager", "Entrevista técnica"]
+
+
+def safe_filename(name: str, max_len: int = 120) -> str:
+    """Nombre de archivo válido en Windows: sin caracteres reservados ni espacios repetidos."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", name)
+    name = re.sub(r"\s+", " ", name).strip(" .")
+    return name[:max_len] or "posicion"
+
+
+def _write_unique(path: Path, data: bytes) -> str:
+    """Escribe sin pisar archivos existentes: agrega (2), (3)… si hace falta."""
+    target, n = path, 2
+    while target.exists():
+        target = path.with_name(f"{path.stem} ({n}){path.suffix}")
+        n += 1
+    target.write_bytes(data)
+    return str(target)
 
 
 def run_id_of(exc: BaseException) -> str | None:
@@ -50,9 +101,11 @@ class Lazarus:
         self._env_keys = dict(cfg["keys"])
         self._injected = {"brightdata": brightdata is not None, "firecrawl": firecrawl is not None}
         c = cfg["claude"]
-        self.claude = claude or ClaudeClient(c["binary"], c["timeout_s"], c["retries"])
+        self.claude = claude or ClaudeClient(c["binary"], c["timeout_s"], c["retries"],
+                                             long_timeout=c.get("long_timeout_s", 360))
         self.brightdata = brightdata
         self.firecrawl = firecrawl
+        self.youtube_http = None  # cliente httpx de YouTube; los tests lo reemplazan
         self.apply_settings()
         self._seed_domains()
 
@@ -119,6 +172,12 @@ class Lazarus:
                     if name == "firecrawl":
                         r = httpx.get("https://api.firecrawl.dev/v2/team/credit-usage",
                                       headers={"Authorization": f"Bearer {key}"}, timeout=20)
+                    elif name == "youtube":
+                        r = httpx.get("https://www.googleapis.com/youtube/v3/search",
+                                      params={"part": "id", "q": "aws", "maxResults": 1, "type": "video", "key": key},
+                                      timeout=20)
+                        if r.status_code == 400:  # Google responde 400 con una clave inválida
+                            return {"ok": False, "message": "La clave no es válida"}
                     else:
                         r = httpx.get("https://api.brightdata.com/zone/get_active_zones",
                                       headers={"Authorization": f"Bearer {key}"}, timeout=20)
@@ -146,8 +205,10 @@ class Lazarus:
             sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
             row = self.db.one("SELECT id FROM cv WHERE sha256 = ?", (sha,))
             cv_id = row["id"] if row else self.db.execute(
-                "INSERT INTO cv (filename, text, sha256, created_at) VALUES (?,?,?,?)",
-                (filename, text, sha, now())).lastrowid
+                "INSERT INTO cv (filename, text, file_blob, sha256, created_at) VALUES (?,?,?,?,?)",
+                (filename, text, data, sha, now())).lastrowid
+            if row:
+                self.db.execute("UPDATE cv SET file_blob = COALESCE(file_blob, ?) WHERE id = ?", (data, cv_id))
             self.db.execute("UPDATE cv SET active = (id = ?)", (cv_id,))
             if not self.db.one("SELECT 1 FROM cv_profile WHERE cv_id = ?", (cv_id,)):
                 profile = self.claude.run("cv_profile", f"<cv>\n{text}\n</cv>", run)
@@ -229,10 +290,21 @@ class Lazarus:
 
     # ------------------------------------------------------------- búsqueda
     def search(self, keyword: str, location: str, country: str, sources: list[str], force: bool = False,
-               all_portals: bool = False, max_pages: int | None = None, remote: bool = False) -> dict:
+               all_portals: bool = False, max_pages: int | None = None, remote: bool = False,
+               level: str | None = None, freshness: str | None = None,
+               modalities: list[str] | None = None, part_time: bool = False) -> dict:
         keyword, location, country = keyword.strip(), location.strip(), country.strip().upper()
+        level = level if level in scoring.LEVELS else None
+        freshness = freshness if freshness in normalize.FRESHNESS_DAYS else None
+        if remote and not modalities:
+            modalities = ["remote"]
+        modalities = sorted({m for m in (modalities or []) if m in MODALITIES})
+        if len(modalities) == len(MODALITIES):
+            modalities = []  # las tres = cualquiera
+        remote = modalities == ["remote"]
         params = {"keyword": keyword, "location": location, "country": country, "sources": sorted(sources),
-                  "remote": bool(remote)}
+                  "remote": remote, "level": level, "freshness": freshness, "modalities": modalities,
+                  "part_time": bool(part_time)}
         log_params = {**params, "all_portals": all_portals, "max_pages": max_pages}
         with self.log.run("search", log_params) as run:
             if not force:
@@ -241,9 +313,10 @@ class Lazarus:
                     run.emit("search_reused", search_id=reused["id"])
                     return {"search_id": reused["id"], "reused": True, "results": {}, "run_id": run.id}
             search_id = self.db.execute(
-                "INSERT INTO search (keyword, location, country, sources_json, remote, run_id, created_at)"
-                " VALUES (?,?,?,?,?,?,?)",
-                (keyword, location, country, json.dumps(sorted(sources)), int(remote), run.id, now())).lastrowid
+                "INSERT INTO search (keyword, location, country, sources_json, remote, level, freshness, modalities,"
+                " part_time, run_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (keyword, location, country, json.dumps(sorted(sources)), int(remote), level, freshness,
+                 json.dumps(modalities) if modalities else None, int(bool(part_time)), run.id, now())).lastrowid
             status = self.source_status()
             results: dict[str, dict] = {}
             futures = {}
@@ -253,14 +326,19 @@ class Lazarus:
                         results[s] = {"status": "skipped", "message": status.get(s, {}).get("why", "Fuente desconocida")}
                         continue
                     if s in BD_SOURCES:
-                        futures[ex.submit(self.brightdata.search, s, keyword, location, country, run, remote)] = s
+                        futures[ex.submit(self.brightdata.search, s, keyword, location, country, run, False, level,
+                                          freshness, modalities, bool(part_time))] = s
                     else:
                         hosts = self._hosts_for("" if all_portals else country)
                         known = {r["url"] for r in self.db.query("SELECT url FROM job")}
                         # Sin ciudad, se agrega el nombre del país: los portales regionales (ej. Get on Board)
                         # devuelven ofertas de toda la región si la consulta no dice el país.
                         where = location or COUNTRY_NAMES.get(country, "")
-                        query = f"{keyword} remoto" if remote else keyword
+                        query = keyword
+                        if len(modalities) == 1 and modalities[0] in ("remote", "hybrid"):
+                            query += " remoto" if modalities[0] == "remote" else " híbrido"
+                        if part_time:
+                            query += " part time"
                         futures[ex.submit(self.firecrawl.search, query, where, hosts, known, run, max_pages)] = s
                 for fut in as_completed(futures):
                     s = futures[fut]
@@ -284,9 +362,11 @@ class Lazarus:
         since = (datetime.now(timezone.utc) - timedelta(hours=self.cfg["search"]["reuse_hours"])).isoformat(timespec="seconds")
         return self.db.one(
             "SELECT id FROM search WHERE keyword = ? AND location = ? AND country = ? AND sources_json = ?"
-            " AND remote = ? AND created_at >= ? ORDER BY id DESC LIMIT 1",
+            " AND COALESCE(level, '') = ? AND COALESCE(freshness, '') = ? AND COALESCE(modalities, '') = ?"
+            " AND part_time = ? AND created_at >= ? ORDER BY id DESC LIMIT 1",
             (params["keyword"], params["location"], params["country"], json.dumps(params["sources"]),
-             int(params["remote"]), since))
+             params["level"] or "", params["freshness"] or "",
+             json.dumps(params["modalities"]) if params["modalities"] else "", int(params["part_time"]), since))
 
     def searches(self, limit: int = 50) -> list[dict]:
         return self.db.query(
@@ -310,7 +390,8 @@ class Lazarus:
             counts = {"ok": 0, "not_job": 0, "failed": 0, "duplicates": 0}
 
             def work(job):
-                data = (f"<vacante>\nTítulo: {job['title'] or ''}\nEmpresa: {job['company'] or ''}\n"
+                data = (f"<vacante>\nFecha de hoy: {now()[:10]}\nPublicada: {job['posted_at'] or 'sin dato'}\n"
+                        f"Título: {job['title'] or ''}\nEmpresa: {job['company'] or ''}\n"
                         f"Ubicación: {job['location'] or ''}\nURL: {job['url']}\n\n"
                         f"{job['description'][:MAX_DESC]}\n</vacante>")
                 return self.claude.run("extract_job", data, run)
@@ -343,13 +424,15 @@ class Lazarus:
         self.db.execute(
             "INSERT OR REPLACE INTO job_analysis (job_id, is_job_posting, skills_required_json, skills_nice_json,"
             " seniority, modality, country, city, language, years_min, salary_min, salary_max, salary_currency,"
-            " salary_period, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " salary_period, posted_on, employment_type, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (job["id"], int(bool(a.get("is_job_posting"))),
              json.dumps(normalize.canon_skills(a.get("skills_required")), ensure_ascii=False),
              json.dumps(normalize.canon_skills(a.get("skills_nice")), ensure_ascii=False),
              a.get("seniority"), a.get("modality"), (a.get("country") or "").upper() or None, a.get("city"),
              a.get("language"), a.get("years_min"), sal.get("min"), sal.get("max"), sal.get("currency"),
-             sal.get("period"), now()))
+             sal.get("period"), normalize.posted_on(job, a), a.get("employment_type"), now()))
+        if a.get("is_closed") or normalize.looks_closed(job["description"]):
+            self.db.execute("UPDATE job SET closed = 1, closed_checked_at = ? WHERE id = ?", (now(), job["id"]))
         if not a.get("is_job_posting"):
             self.db.execute("UPDATE job SET analysis_status = 'not_job' WHERE id = ?", (job["id"],))
             return "not_job"
@@ -388,29 +471,68 @@ class Lazarus:
 
     # --------------------------------------------------------------- ranking
     def ranking(self, search_id: int | None = None, other_countries: bool = True,
-                remote_only: bool | None = None) -> list[dict]:
+                remote_only: bool | None = None, my_level_only: bool | None = None,
+                max_age_days: int | None = None, include_undated: bool = True,
+                include_closed: bool = False, include_hidden: bool = False,
+                modalities: list[str] | None = None, part_time_only: bool | None = None,
+                include_unknown_modality: bool = True) -> list[dict]:
         """Ofertas ordenadas por afinidad. Con other_countries=False y una búsqueda con país,
         oculta las ofertas de otros países (las de país desconocido se muestran)."""
         cv = self.active_cv()
         if not cv:
             return []
         sql = ("SELECT m.id AS match_id, m.score, m.breakdown_json, m.reasons_json, j.id AS job_id, j.title,"
-               " j.company, j.location, j.country, j.url, j.source, a.modality, a.seniority, a.language"
+               " j.company, j.location, j.country, j.url, j.source, j.closed, a.modality, a.seniority, a.language,"
+               " a.employment_type,"
+               " a.posted_on, t.status AS tracking"
                " FROM match m JOIN job j ON j.id = m.job_id JOIN job_analysis a ON a.job_id = j.id"
+               " LEFT JOIN job_tracking t ON t.job_id = j.id"
                " WHERE m.cv_id = ? AND j.duplicate_of IS NULL")
         params: list = [cv["id"]]
         if search_id:
             sql += " AND j.id IN (SELECT job_id FROM search_result WHERE search_id = ?)"
             params.append(search_id)
-            srow = self.db.one("SELECT country, remote FROM search WHERE id = ?", (search_id,)) or {}
+            srow = self.db.one("SELECT country, remote, level, modalities, part_time FROM search WHERE id = ?",
+                               (search_id,)) or {}
+            if modalities is None and remote_only is None:
+                modalities = json.loads(srow.get("modalities") or "[]") or None
+            if part_time_only is None:
+                part_time_only = bool(srow.get("part_time"))
+            level = srow.get("level")
+            if my_level_only is None:
+                my_level_only = bool(level)
+            if my_level_only and level in scoring.LEVELS:
+                # Oculta posiciones de un nivel superior al buscado o que piden más años de los que tiene el CV.
+                above = scoring.LEVELS[scoring.LEVELS.index(level) + 1:]
+                if above:
+                    sql += f" AND COALESCE(a.seniority, 'unknown') NOT IN ({','.join('?' * len(above))})"
+                    params.extend(above)
+                years = (cv.get("profile") or {}).get("years_experience")
+                if years is not None:
+                    sql += " AND (a.years_min IS NULL OR a.years_min <= ?)"
+                    params.append(float(years) + 1)
             country = srow.get("country")
-            if remote_only is None:
-                remote_only = bool(srow.get("remote"))
             if country and not other_countries:
                 sql += " AND (COALESCE(a.country, j.country) IS NULL OR COALESCE(a.country, j.country) = ?)"
                 params.append(country)
+        if not include_closed:
+            sql += " AND j.closed = 0"
+        if not include_hidden:
+            sql += " AND COALESCE(t.status, '') NOT IN ('no_me_gusta', 'no_mostrar')"
         if remote_only:
-            sql += " AND a.modality = 'remote'"
+            modalities = ["remote"]
+        if modalities:
+            ph = ",".join("?" * len(modalities))
+            sql += (f" AND (a.modality IN ({ph}) OR COALESCE(a.modality, 'unknown') = 'unknown')"
+                    if include_unknown_modality else f" AND a.modality IN ({ph})")
+            params.extend(modalities)
+        if part_time_only:
+            sql += (" AND (a.employment_type = 'part_time' OR COALESCE(a.employment_type, 'unknown') = 'unknown')"
+                    if include_unknown_modality else " AND a.employment_type = 'part_time'")
+        if max_age_days:
+            since_day = (datetime.now(timezone.utc).date() - timedelta(days=max_age_days)).isoformat()
+            sql += " AND (a.posted_on >= ?" + (" OR a.posted_on IS NULL)" if include_undated else ")")
+            params.append(since_day)
         rows = self.db.query(sql + " ORDER BY m.score DESC, j.id DESC", params)
         for r in rows:
             r["breakdown"] = json.loads(r.pop("breakdown_json"))
@@ -598,7 +720,8 @@ class Lazarus:
                 rj = RawJob(source=f"web:{host}", url=url, description=md)
             job_id, _ = normalize.insert_job(self.db, rj)
             job = self.db.one("SELECT * FROM job WHERE id = ?", (job_id,))
-            data = (f"<vacante>\nTítulo: {job['title'] or ''}\nEmpresa: {job['company'] or ''}\n"
+            data = (f"<vacante>\nFecha de hoy: {now()[:10]}\nPublicada: {job['posted_at'] or 'sin dato'}\n"
+                    f"Título: {job['title'] or ''}\nEmpresa: {job['company'] or ''}\n"
                     f"Ubicación: {job['location'] or ''}\nURL: {job['url']}\n\n{job['description'][:MAX_DESC]}\n</vacante>")
             result = self._save_analysis(job, self.claude.run("extract_job", data, run))
             if result == "not_job":
@@ -608,9 +731,13 @@ class Lazarus:
                 self._rescore(cv["id"])
             return job_id
 
-    def positions_for_interview(self) -> list[dict]:
-        """Posiciones recomendadas (ranking) y las agregadas por link, sin repetir."""
-        rows = self.ranking()
+    def positions_for_interview(self, only_tracked: bool = False) -> list[dict]:
+        """Favoritas y aplicadas primero; después las recomendadas y las agregadas por link, sin repetir."""
+        tracked = [{**r, "score": r.get("score")} for r in self.tracked(["favorito", "aplicado"])]
+        if only_tracked:
+            return tracked
+        rows = [r for r in self.ranking() if r["job_id"] not in {t["job_id"] for t in tracked}]
+        rows = tracked + rows
         seen = {r["job_id"] for r in rows}
         extra = self.db.query(
             "SELECT j.id AS job_id, j.title, j.company, j.url FROM job j JOIN job_analysis a ON a.job_id = j.id"
@@ -658,8 +785,34 @@ class Lazarus:
         out = []
         for r in rows:
             out.append({"name": r["name"], "status": r["status"], "notes": r["notes"],
-                        "plan": plan.get(r["name"]), "deep": json.loads(r["result_json"]) if r["result_json"] else None})
+                        "plan": plan.get(r["name"]) or CATALOG_BY_NAME.get(r["name"]),
+                        "deep": json.loads(r["result_json"]) if r["result_json"] else None})
         return out
+
+    def set_stages(self, job_id: int, names: list[str]) -> list[str]:
+        """Deja en el proceso las etapas elegidas, en el orden típico; las propias van al final.
+        Una etapa quitada que ya tiene notas o preparación se conserva para no perder trabajo. Devuelve las conservadas."""
+        cv = self.active_cv()
+        if not cv:
+            raise ValueError("No hay un CV cargado")
+        order = {c["name"]: i for i, c in enumerate(STAGE_CATALOG)}
+        names = [n.strip() for n in names if n.strip()]
+        for n in names:
+            pos = order.get(n, 50 + names.index(n))
+            self.db.execute("INSERT INTO interview_stage (cv_id, job_id, name, position, updated_at) VALUES (?,?,?,?,?)"
+                            " ON CONFLICT(cv_id, job_id, name) DO UPDATE SET position = excluded.position",
+                            (cv["id"], job_id, n, pos, now()))
+        kept = []
+        for r in self.db.query("SELECT name, notes, result_json, status FROM interview_stage WHERE cv_id = ? AND job_id = ?",
+                               (cv["id"], job_id)):
+            if r["name"] in names:
+                continue
+            if r["notes"].strip() or r["result_json"] or r["status"] == "hecha":
+                kept.append(r["name"])
+            else:
+                self.db.execute("DELETE FROM interview_stage WHERE cv_id = ? AND job_id = ? AND name = ?",
+                                (cv["id"], job_id, r["name"]))
+        return kept
 
     def add_stage(self, job_id: int, name: str) -> None:
         cv = self.active_cv()
@@ -708,6 +861,284 @@ class Lazarus:
                     f"<etapa>{stage or ''}</etapa>\n"
                     f"<pregunta>\n{question}\n</pregunta>\n<respuesta>\n{answer}\n</respuesta>")
             return self.claude.run("interview_feedback", data, run)
+
+    # --------------------------------------------------------- tutor Lazarus
+    TUTOR_MAX_SEARCHES = 14
+    RESOURCE_TYPES = ("video", "curso", "documentacion")
+
+    @property
+    def youtube(self) -> YouTubeSource:
+        return YouTubeSource(self.cfg["keys"]["youtube"], self.firecrawl, self.youtube_http)
+
+    def market_gaps(self) -> list[dict]:
+        """Habilidades obligatorias que piden las ofertas revisadas y el CV activo no muestra, de más a menos pedidas."""
+        from . import metrics
+        cv = self.active_cv()
+        df = metrics.load_frame(self.db)
+        if df.empty:
+            return []
+        g = metrics.gap(df, (cv["profile"].get("skills", []) if cv else []), threshold=0)
+        return g.head(40).to_dict("records")
+
+    def position_gaps(self, job_id: int) -> list[str]:
+        """Habilidades obligatorias de una posición que el CV no muestra."""
+        cv = self.active_cv()
+        if cv:
+            m = self.db.one("SELECT breakdown_json FROM match WHERE cv_id = ? AND job_id = ?", (cv["id"], job_id))
+            if m:
+                return json.loads(m["breakdown_json"]).get("skills_missing_required", [])
+        job = self.job_detail(job_id)
+        have = set(cv["profile"].get("skills", [])) if cv else set()
+        return [s for s in job["skills_required"] if s not in have]
+
+    def _find_videos(self, query: str, lang: str, run) -> list[dict]:
+        videos, credits = self.youtube.search(query, run, lang=lang)
+        if credits:
+            usage.record(self.db, "firecrawl", "tutor", credits, run.id)
+        return videos
+
+    def _resolve_resources(self, tasks: list[dict], run) -> dict:
+        """Busca recursos reales para las tareas y deja que Claude elija solo entre lo encontrado."""
+        yt_mode = self.youtube.mode
+        fc_ok = self.firecrawl.available()[0] and not usage.status(self.db, self.cfg)["firecrawl"]["blocked"]
+        candidates: list[dict] = []
+        seen: dict[str, int] = {}
+        searches = 0
+        wanted = [t for t in tasks if t.get("type") in self.RESOURCE_TYPES and t.get("search_query")]
+        for t in wanted:
+            if searches >= self.TUTOR_MAX_SEARCHES:
+                break
+            try:
+                if t["type"] == "video" and yt_mode != "none":
+                    found = self._find_videos(t["search_query"], t.get("language", "es"), run)
+                    kind = "video"
+                elif t["type"] != "video" and fc_ok:
+                    found, credits = self.firecrawl.find(t["search_query"], run)
+                    usage.record(self.db, "firecrawl", "tutor", credits, run.id)
+                    kind = "web"
+                else:
+                    continue
+            except SourceError as exc:
+                run.emit("tutor.search_failed", level="WARNING", query=t["search_query"], error=str(exc)[:200])
+                continue
+            searches += 1
+            for f in found:
+                if f["url"] not in seen:
+                    seen[f["url"]] = len(candidates) + 1
+                    candidates.append({"n": len(candidates) + 1, "kind": kind, **f})
+        if not candidates:
+            return {}
+        brief = [{k: t.get(k) for k in ("id", "title", "type", "skill", "language")} for t in wanted]
+        cands = [{k: c.get(k) for k in ("n", "title", "url", "channel", "duration", "views", "published", "text")}
+                 for c in candidates]
+        data = (f"<tareas>\n{json.dumps(brief, ensure_ascii=False)}\n</tareas>\n"
+                f"<candidatos>\n{json.dumps(cands, ensure_ascii=False)}\n</candidatos>")
+        picks = self.claude.run("learning_resources", data, run)
+        by_n = {c["n"]: c for c in candidates}
+        ids = {t["id"] for t in wanted}
+        out: dict[str, list] = {}
+        for t in picks.get("tasks", []):
+            if t.get("id") not in ids:
+                continue
+            chosen = [{**by_n[p["n"]], "why": p.get("why", "")} for p in t.get("picks", []) if p.get("n") in by_n]
+            if chosen:  # solo recursos que la app encontró: nunca links escritos por el modelo
+                out[t["id"]] = [{k: v for k, v in c.items() if k not in ("n", "text")} for c in chosen]
+        return out
+
+    def create_learning_plan(self, inputs: dict) -> int:
+        """inputs: skills [{skill, level}], hours, target_date, styles, origin {kind, label, job_id}. Devuelve plan_id."""
+        cv = self.active_cv()
+        with self.log.run("learning_plan", {"skills": len(inputs.get("skills", [])),
+                                            "origin": inputs.get("origin", {}).get("kind")}) as run:
+            if not inputs.get("skills"):
+                raise ValueError("Elige al menos una habilidad")
+            p = cv["profile"] if cv else {}
+            perfil = {"roles": p.get("roles", []), "nivel": p.get("seniority"),
+                      "anios_experiencia": p.get("years_experience"), "habilidades": p.get("skills", [])}
+            prefs = {"horas_por_semana": inputs.get("hours"), "fecha_objetivo": inputs.get("target_date"),
+                     "hoy": datetime.now().date().isoformat(), "aprende_mejor_con": inputs.get("styles", [])}
+            data = (f"<perfil>\n{json.dumps(perfil, ensure_ascii=False)}\n</perfil>\n"
+                    f"<habilidades>\n{json.dumps(inputs['skills'], ensure_ascii=False)}\n</habilidades>\n"
+                    f"<preferencias>\n{json.dumps(prefs, ensure_ascii=False)}\n</preferencias>\n"
+                    f"<contexto>\n{inputs.get('origin', {}).get('label', '')}\n</contexto>")
+            plan = self.claude.run("learning_plan", data, run)
+            tasks = [t for w in plan["weeks"] for t in w["tasks"]]
+            try:
+                resources = self._resolve_resources(tasks, run)
+            except (ClaudeError, SourceError) as exc:  # el plan sirve aunque falten los recursos
+                run.emit("tutor.resources_failed", level="WARNING", error=str(exc)[:200])
+                resources = {}
+            cur = self.db.execute(
+                "INSERT INTO learning_plan (cv_id, inputs_json, plan_json, resources_json, created_at)"
+                " VALUES (?,?,?,?,?)", (cv["id"] if cv else None, json.dumps(inputs, ensure_ascii=False),
+                                        json.dumps(plan, ensure_ascii=False),
+                                        json.dumps(resources, ensure_ascii=False), now()))
+            run.emit("tutor.plan_saved", resources=sum(len(v) for v in resources.values()))
+            return cur.lastrowid
+
+    def learning_plans(self) -> list[dict]:
+        rows = self.db.query("SELECT id, inputs_json, created_at FROM learning_plan ORDER BY id DESC")
+        for r in rows:
+            r["inputs"] = json.loads(r.pop("inputs_json"))
+        return rows
+
+    def get_learning_plan(self, plan_id: int) -> dict | None:
+        row = self.db.one("SELECT * FROM learning_plan WHERE id = ?", (plan_id,))
+        if not row:
+            return None
+        done = {r["task_id"] for r in self.db.query(
+            "SELECT task_id FROM learning_progress WHERE plan_id = ? AND done = 1", (plan_id,))}
+        return {"id": row["id"], "created_at": row["created_at"], "inputs": json.loads(row["inputs_json"]),
+                "plan": json.loads(row["plan_json"]), "resources": json.loads(row["resources_json"]), "done": done}
+
+    def set_task_done(self, plan_id: int, task_id: str, done: bool) -> None:
+        self.db.execute("INSERT INTO learning_progress (plan_id, task_id, done, updated_at) VALUES (?,?,?,?)"
+                        " ON CONFLICT(plan_id, task_id) DO UPDATE SET done = excluded.done,"
+                        " updated_at = excluded.updated_at", (plan_id, task_id, int(done), now()))
+
+    def tutor_messages(self, plan_id: int) -> list[dict]:
+        rows = self.db.query("SELECT * FROM tutor_message WHERE plan_id = ? ORDER BY id", (plan_id,))
+        for r in rows:
+            r["videos"] = json.loads(r.pop("videos_json"))
+        return rows
+
+    def tutor_chat(self, plan_id: int, message: str) -> dict:
+        """Responde como Lazarus y agrega videos reales si la respuesta los pide."""
+        lp = self.get_learning_plan(plan_id)
+        if not lp:
+            raise ValueError("No encontré ese plan")
+        self.db.execute("INSERT INTO tutor_message (plan_id, role, content, created_at) VALUES (?,?,?,?)",
+                        (plan_id, "user", message, now()))
+        with self.log.run("tutor_chat", {"plan_id": plan_id}) as run:
+            resumen = {"habilidades": [s["skill"] for s in lp["inputs"]["skills"]],
+                       "horas_por_semana": lp["inputs"].get("hours"),
+                       "semanas": [{"semana": w["week"], "titulo": w["title"],
+                                    "tareas": [{"tarea": t["title"], "hecha": t["id"] in lp["done"]}
+                                               for t in w["tasks"]]} for w in lp["plan"]["weeks"]]}
+            history = [{"rol": m["role"], "texto": m["content"][:1500]} for m in self.tutor_messages(plan_id)[-9:-1]]
+            data = (f"<plan>\n{json.dumps(resumen, ensure_ascii=False)}\n</plan>\n"
+                    f"<conversacion>\n{json.dumps(history, ensure_ascii=False)}\n</conversacion>\n"
+                    f"<mensaje>\n{message}\n</mensaje>")
+            result = self.claude.run("tutor_chat", data, run)
+            videos: list[dict] = []
+            if self.youtube.mode != "none":
+                for q in result.get("search_queries", [])[:2]:
+                    try:
+                        videos.extend(self._find_videos(q, "es", run)[:3])
+                    except SourceError as exc:
+                        run.emit("tutor.search_failed", level="WARNING", query=q, error=str(exc)[:200])
+            self.db.execute("INSERT INTO tutor_message (plan_id, role, content, videos_json, created_at)"
+                            " VALUES (?,?,?,?,?)", (plan_id, "lazarus", result["reply"],
+                                                    json.dumps(videos, ensure_ascii=False), now()))
+            return {"reply": result["reply"], "videos": videos}
+
+    # -------------------------------------------------- posición cerrada
+    def verify_open(self, job_id: int) -> dict:
+        """Vuelve a leer la posición en su sitio para saber si sigue abierta."""
+        job = self.job_detail(job_id)
+        host = normalize.host_of(job["url"])
+        with self.log.run("verify_open", {"job_id": job_id, "host": host}) as run:
+            closed, reason = False, ""
+            if "linkedin.com" in host and self.brightdata.available("linkedin")[0]:
+                rj = self.brightdata.collect_url("linkedin", job["url"], run)
+                usage.record(self.db, "brightdata", "verify", 1, run.id)
+                raw = rj.raw if rj else {}
+                flags = [k for k, v in raw.items() if "closed" in k.lower() and v not in (None, False, "", 0, "false")]
+                if not rj:
+                    closed, reason = True, "LinkedIn ya no muestra la posición"
+                elif flags or normalize.looks_closed(rj.description):
+                    closed, reason = True, "LinkedIn indica que ya no recibe postulaciones"
+            elif self.firecrawl.available()[0]:
+                md, status = self.firecrawl.fetch_fresh(job["url"], run)
+                usage.record(self.db, "firecrawl", "verify", 1, run.id)
+                if md is None or (status and status >= 400):
+                    closed, reason = True, f"La página ya no existe (código {status})" if status else "La página ya no existe"
+                elif normalize.looks_closed(md):
+                    closed, reason = True, "La página dice que ya no recibe postulaciones"
+            else:
+                raise ValueError("Falta conectar una fuente para verificar la posición")
+            self.db.execute("UPDATE job SET closed = ?, closed_checked_at = ? WHERE id = ?", (int(closed), now(), job_id))
+            run.emit("verify_result", closed=closed, reason=reason)
+            return {"closed": closed, "reason": reason or "Sigue abierta"}
+
+    # -------------------------------------------------------- seguimiento
+    TRACK_STATUSES = ("favorito", "aplicado", "no_me_gusta", "no_mostrar")
+
+    def applications_dir(self) -> Path:
+        custom = self.get_setting("applications_dir")
+        if custom:
+            return Path(custom)
+        docs = Path.home() / "Documents"
+        return (docs if docs.is_dir() else Path.home()) / "Lazarus" / "aplicaciones"
+
+    def set_status(self, job_id: int, status: str | None, notes: str | None = None) -> dict:
+        """Guarda el estado de seguimiento. Al marcar "aplicado", copia el CV (y la carta, si existe)
+        a la carpeta de aplicaciones con el nombre de la empresa y la posición."""
+        if status is not None and status not in self.TRACK_STATUSES:
+            raise ValueError("Estado desconocido")
+        with self.log.run("tracking", {"job_id": job_id, "status": status}):
+            if status is None:
+                self.db.execute("DELETE FROM job_tracking WHERE job_id = ?", (job_id,))
+                return {}
+            prev = self.db.one("SELECT * FROM job_tracking WHERE job_id = ?", (job_id,)) or {}
+            files = json.loads(prev.get("files_json") or "[]")
+            applied_at = prev.get("applied_at")
+            if status == "aplicado" and not applied_at:
+                applied_at = now()
+                files = self.save_application_files(job_id)
+            self.db.execute(
+                "INSERT INTO job_tracking (job_id, status, notes, applied_at, files_json, updated_at) VALUES (?,?,?,?,?,?)"
+                " ON CONFLICT(job_id) DO UPDATE SET status = excluded.status, notes = excluded.notes,"
+                " applied_at = excluded.applied_at, files_json = excluded.files_json, updated_at = excluded.updated_at",
+                (job_id, status, notes if notes is not None else prev.get("notes", ""), applied_at,
+                 json.dumps(files, ensure_ascii=False), now()))
+            return {"status": status, "files": files}
+
+    def save_application_files(self, job_id: int) -> list[str]:
+        """Copia en la carpeta de aplicaciones: el CV a medida (si existe) o el CV original, y la carta."""
+        from .documents import cv_to_docx
+        from .letters import to_docx_bytes
+
+        job = self.job_detail(job_id)
+        cv = self.active_cv()
+        if not cv:
+            return []
+        folder = self.applications_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        base = safe_filename(f"{job['company'] or 'Empresa'} - {job['title'] or 'Posición'}")
+        saved = []
+        tailored = self.get_tailored_cv(job_id)
+        row = self.db.one("SELECT filename, file_blob, text FROM cv WHERE id = ?", (cv["id"],))
+        if tailored:
+            saved.append(_write_unique(folder / f"CV - {base}.docx", cv_to_docx(tailored)))
+        elif row and row["file_blob"]:
+            ext = Path(row["filename"]).suffix.lower() or ".pdf"
+            saved.append(_write_unique(folder / f"CV - {base}{ext}", row["file_blob"]))
+        else:
+            saved.append(_write_unique(folder / f"CV - {base}.docx", to_docx_bytes(row["text"] if row else "")))
+        m = self.db.one("SELECT id FROM match WHERE cv_id = ? AND job_id = ?", (cv["id"], job_id))
+        letter = self.db.one("SELECT body_md FROM cover_letter WHERE match_id = ? ORDER BY id DESC LIMIT 1",
+                             (m["id"],)) if m else None
+        if letter:
+            saved.append(_write_unique(folder / f"Carta - {base}.docx", to_docx_bytes(letter["body_md"])))
+        return saved
+
+    def tracked(self, statuses: list[str] | None = None) -> list[dict]:
+        cv = self.active_cv()
+        sql = ("SELECT t.*, j.id AS job_id, j.title, j.company, j.url, j.location, j.country, j.closed,"
+               " m.id AS match_id, m.score FROM job_tracking t JOIN job j ON j.id = t.job_id"
+               " LEFT JOIN match m ON m.job_id = j.id AND m.cv_id = ?")
+        params: list = [cv["id"] if cv else -1]
+        if statuses:
+            sql += f" WHERE t.status IN ({','.join('?' * len(statuses))})"
+            params.extend(statuses)
+        rows = self.db.query(sql + " ORDER BY t.updated_at DESC", params)
+        for r in rows:
+            r["files"] = json.loads(r.pop("files_json") or "[]")
+        return rows
+
+    def save_notes(self, job_id: int, notes: str) -> None:
+        self.db.execute("UPDATE job_tracking SET notes = ?, updated_at = ? WHERE job_id = ?", (notes, now(), job_id))
 
     # --------------------------------------------------------------- corridas
     def runs(self, limit: int = 200, kind: str | None = None, status: str | None = None) -> list[dict]:
@@ -773,7 +1204,8 @@ class Lazarus:
         summary = {
             "lazarus_version": __version__,
             "exported_at": now(),
-            "search": {k: search[k] for k in ("id", "keyword", "location", "country", "remote", "sources_json", "created_at")},
+            "search": {k: search[k] for k in ("id", "keyword", "location", "country", "modalities", "part_time", "level", "freshness",
+                                               "sources_json", "created_at")},
             "runs": [{**{k: r[k] for k in ("run_id", "kind", "status", "started_at", "duration_ms", "error")},
                       "params": json.loads(r["params_json"] or "{}"), "steps": self.run_steps(r["run_id"])}
                      for r in runs],

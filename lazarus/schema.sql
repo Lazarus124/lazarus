@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS cv (
     id INTEGER PRIMARY KEY,
     filename TEXT NOT NULL,
     text TEXT NOT NULL,
+    file_blob BLOB,             -- archivo original (PDF o DOCX) para copiarlo al postularse
     sha256 TEXT NOT NULL UNIQUE,
     active INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
@@ -19,6 +20,10 @@ CREATE TABLE IF NOT EXISTS search (
     country TEXT,
     sources_json TEXT NOT NULL,
     remote INTEGER NOT NULL DEFAULT 0,
+    freshness TEXT,             -- day | 3days | week | month (vacío = cualquier fecha)
+    modalities TEXT,            -- JSON: ["remote","hybrid","onsite"] (vacío = cualquiera)
+    part_time INTEGER NOT NULL DEFAULT 0,
+    level TEXT,                 -- nivel buscado: intern | junior | mid | senior | lead (vacío = cualquiera)
     run_id TEXT,
     created_at TEXT NOT NULL
 );
@@ -36,6 +41,8 @@ CREATE TABLE IF NOT EXISTS job (
     fetched_at TEXT NOT NULL,
     duplicate_of INTEGER REFERENCES job(id),
     analysis_status TEXT NOT NULL DEFAULT 'pending',  -- pending | ok | not_job | failed
+    closed INTEGER NOT NULL DEFAULT 0,                -- 1 = la posición ya no recibe postulaciones
+    closed_checked_at TEXT,
     raw_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_job_dedup ON job(dedup_key);
@@ -59,6 +66,8 @@ CREATE TABLE IF NOT EXISTS job_analysis (
     salary_max REAL,
     salary_currency TEXT,
     salary_period TEXT,
+    posted_on TEXT,             -- fecha de publicación (AAAA-MM-DD) si se conoce
+    employment_type TEXT,       -- full_time | part_time | contract | internship | unknown
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS match (
@@ -153,4 +162,35 @@ CREATE TABLE IF NOT EXISTS interview_stage (
     result_json TEXT,                           -- preparación a fondo de la etapa
     updated_at TEXT NOT NULL,
     PRIMARY KEY (cv_id, job_id, name)
+);
+CREATE TABLE IF NOT EXISTS job_tracking (
+    job_id INTEGER PRIMARY KEY REFERENCES job(id),
+    status TEXT NOT NULL,       -- favorito | aplicado | no_me_gusta | no_mostrar
+    notes TEXT NOT NULL DEFAULT '',
+    applied_at TEXT,
+    files_json TEXT,            -- copias guardadas en la carpeta de aplicaciones
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS learning_plan (
+    id INTEGER PRIMARY KEY,
+    cv_id INTEGER REFERENCES cv(id),
+    inputs_json TEXT NOT NULL,      -- habilidades, niveles, horas, fecha, estilo, origen
+    plan_json TEXT NOT NULL,
+    resources_json TEXT NOT NULL DEFAULT '{}',  -- task_id -> recursos verificados
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS learning_progress (
+    plan_id INTEGER NOT NULL REFERENCES learning_plan(id),
+    task_id TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (plan_id, task_id)
+);
+CREATE TABLE IF NOT EXISTS tutor_message (
+    id INTEGER PRIMARY KEY,
+    plan_id INTEGER NOT NULL REFERENCES learning_plan(id),
+    role TEXT NOT NULL,             -- user | lazarus
+    content TEXT NOT NULL,
+    videos_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL
 );

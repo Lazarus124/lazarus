@@ -108,7 +108,6 @@ def main() -> None:
         "--server.fileWatcherType=none",
         "--browser.gatherUsageStats=false",
         "--global.developmentMode=false",
-        "--theme.base=light",
     ]
     try:
         stcli.main()

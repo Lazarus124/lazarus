@@ -221,3 +221,67 @@ def test_old_database_gets_remote_column(tmp_path):
     con.close()
     db = DB(path)
     assert db.one("SELECT remote FROM search")["remote"] == 0
+
+
+def test_level_filter_hides_positions_above_my_level(make_app):
+    jobs = {"linkedin": [
+        RawJob("linkedin", "https://www.linkedin.com/jobs/view/21", "Junior DevOps. AWS.", title="DevOps Jr", company="A", country="MX"),
+        RawJob("linkedin", "https://www.linkedin.com/jobs/view/22", "Senior DevOps. AWS.", title="DevOps Sr", company="B", country="MX"),
+        RawJob("linkedin", "https://www.linkedin.com/jobs/view/23", "DevOps con 8 años. AWS.", title="DevOps", company="C", country="MX"),
+    ]}
+    bd = FakeBrightData(jobs)
+    app = make_app(brightdata=bd)
+    app.upload_cv("cv.docx", make_docx(CV_TEXT))  # el fake: junior, 2 años
+    sid = app.search("devops", "", "MX", ["linkedin"], level="junior")["search_id"]
+    assert bd.calls  # la búsqueda llegó a la fuente
+    app.analyze(sid)
+    app.db.execute("UPDATE job_analysis SET seniority = 'senior' WHERE job_id = (SELECT id FROM job WHERE url LIKE '%/22')")
+    app.db.execute("UPDATE job_analysis SET years_min = 8 WHERE job_id = (SELECT id FROM job WHERE url LIKE '%/23')")
+    assert {r["title"] for r in app.ranking(sid)} == {"DevOps Jr"}
+    assert len(app.ranking(sid, my_level_only=False)) == 3
+    assert app.db.one("SELECT level FROM search WHERE id = ?", (sid,))["level"] == "junior"
+
+
+def test_freshness_filter(make_app):
+    jobs = {"linkedin": [
+        RawJob("linkedin", "https://www.linkedin.com/jobs/view/31", "DevOps nueva. AWS.", title="Nueva", company="A",
+               country="MX", posted_at="hace 1 día"),
+        RawJob("linkedin", "https://www.linkedin.com/jobs/view/32", "DevOps vieja. AWS.", title="Vieja", company="B", country="MX"),
+        RawJob("linkedin", "https://www.linkedin.com/jobs/view/33", "DevOps. AWS.", title="Sin dato", company="C", country="MX"),
+    ]}
+    app = make_app(brightdata=FakeBrightData(jobs))
+    app.upload_cv("cv.docx", make_docx(CV_TEXT))
+    sid = app.search("devops", "", "MX", ["linkedin"], freshness="week")["search_id"]
+    app.analyze(sid)
+    # "Sin dato" recibe posted_days_ago=2 del fake; se borra para simular una posición sin fecha
+    app.db.execute("UPDATE job_analysis SET posted_on = NULL WHERE job_id = (SELECT id FROM job WHERE url LIKE '%/33')")
+    titles = lambda **kw: {r["title"] for r in app.ranking(sid, **kw)}
+    assert titles(max_age_days=7) == {"Nueva", "Sin dato"}
+    assert titles(max_age_days=7, include_undated=False) == {"Nueva"}
+    assert titles() == {"Nueva", "Vieja", "Sin dato"}
+    assert app.db.one("SELECT freshness FROM search WHERE id = ?", (sid,))["freshness"] == "week"
+
+
+def test_modalities_and_part_time(make_app):
+    jobs = {"linkedin": [
+        RawJob("linkedin", "https://www.linkedin.com/jobs/view/51", "Remoto, medio tiempo. AWS.", title="R-PT", company="A", country="MX"),
+        RawJob("linkedin", "https://www.linkedin.com/jobs/view/52", "Híbrido. AWS.", title="H", company="B", country="MX"),
+        RawJob("linkedin", "https://www.linkedin.com/jobs/view/53", "Oficina. AWS.", title="P", company="C", country="MX"),
+        RawJob("linkedin", "https://www.linkedin.com/jobs/view/54", "Remoto. AWS.", title="R", company="D", country="MX"),
+    ]}
+    bd = FakeBrightData(jobs)
+    fc = _fc()
+    app = make_app(brightdata=bd, fc_client=fc)
+    app.upload_cv("cv.docx", make_docx(CV_TEXT))
+    sid = app.search("devops", "", "MX", ["linkedin", "web"], modalities=["remote", "hybrid"])["search_id"]
+    app.analyze(sid)
+    titles = lambda **kw: {r["title"] for r in app.ranking(sid, **kw)}
+    assert titles() == {"R-PT", "H", "R"}  # sin presencial (y sin las de los portales, marcadas presencial)
+    assert titles(modalities=["remote"], part_time_only=True) == {"R-PT"}
+    assert "P" in titles(modalities=[])
+    s = app.db.one("SELECT modalities, part_time, remote FROM search WHERE id = ?", (sid,))
+    assert json.loads(s["modalities"]) == ["hybrid", "remote"] and s["remote"] == 0
+    # Las tres modalidades = cualquiera; part time va en la consulta de los portales
+    sid2 = app.search("devops", "", "MX", ["web"], modalities=["remote", "hybrid", "onsite"], part_time=True)["search_id"]
+    assert app.db.one("SELECT modalities FROM search WHERE id = ?", (sid2,))["modalities"] is None
+    assert fc.search_calls[-1]["query"].startswith("devops part time")

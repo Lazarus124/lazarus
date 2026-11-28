@@ -1,0 +1,42 @@
+{
+  "type": "object",
+  "required": ["intro", "total_weeks", "weeks", "project", "certifications", "tips"],
+  "properties": {
+    "intro": {"type": "string"},
+    "total_weeks": {"type": "integer", "minimum": 1, "maximum": 52},
+    "weeks": {"type": "array", "minItems": 1, "maxItems": 16, "items": {
+      "type": "object",
+      "required": ["week", "title", "goal", "hours", "tasks", "checkpoint"],
+      "properties": {
+        "week": {"type": "integer"},
+        "title": {"type": "string"},
+        "goal": {"type": "string"},
+        "hours": {"type": "number"},
+        "checkpoint": {"type": "string"},
+        "tasks": {"type": "array", "minItems": 1, "maxItems": 6, "items": {
+          "type": "object",
+          "required": ["id", "title", "type", "skill", "hours", "search_query", "language"],
+          "properties": {
+            "id": {"type": "string"},
+            "title": {"type": "string"},
+            "type": {"type": "string", "enum": ["video", "curso", "documentacion", "practica", "proyecto"]},
+            "skill": {"type": "string"},
+            "hours": {"type": "number"},
+            "search_query": {"type": ["string", "null"]},
+            "language": {"type": "string", "enum": ["es", "en"]}
+          },
+          "additionalProperties": false
+        }}
+      },
+      "additionalProperties": false
+    }},
+    "project": {"type": "object", "required": ["title", "description", "deliverable"],
+      "properties": {"title": {"type": "string"}, "description": {"type": "string"}, "deliverable": {"type": "string"}},
+      "additionalProperties": false},
+    "certifications": {"type": "array", "maxItems": 4, "items": {"type": "object", "required": ["name", "skill", "why"],
+      "properties": {"name": {"type": "string"}, "skill": {"type": "string"}, "why": {"type": "string"}},
+      "additionalProperties": false}},
+    "tips": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

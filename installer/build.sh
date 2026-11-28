@@ -36,7 +36,7 @@ find "$STAGE" -type d -name __pycache__ -prune -exec rm -rf {} +
 
 echo "== App"
 cp -r "$ROOT/app.py" "$ROOT/launcher.py" "$ROOT/config.toml" "$ROOT/README.md" \
-      "$ROOT/lazarus" "$ROOT/pages" "$ROOT/data" "$ROOT/.streamlit" "$STAGE/app/"
+      "$ROOT/lazarus" "$ROOT/pages" "$ROOT/data" "$ROOT/.streamlit" "$ROOT/static" "$STAGE/app/"
 find "$STAGE/app" -type d -name __pycache__ -prune -exec rm -rf {} +
 
 echo "== Payload (zip)"

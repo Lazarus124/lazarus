@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "required": ["tasks"],
+  "properties": {
+    "tasks": {"type": "array", "items": {"type": "object", "required": ["id", "picks"],
+      "properties": {
+        "id": {"type": "string"},
+        "picks": {"type": "array", "maxItems": 2, "items": {"type": "object", "required": ["n", "why"],
+          "properties": {"n": {"type": "integer"}, "why": {"type": "string"}}, "additionalProperties": false}}
+      },
+      "additionalProperties": false}}
+  },
+  "additionalProperties": false
+}
